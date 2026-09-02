@@ -11,7 +11,7 @@ import {
   settingsOf,
   setup,
   statusOf,
-} from "./test-fixtures";
+} from "../testing/fixtures";
 
 installComponentTestHooks();
 

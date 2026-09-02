@@ -46,7 +46,7 @@ function sourceFiles(dir) {
       .filter((name) => !name.split("/").includes("_generated"))
       // Test files and their shared harness legitimately name the variable in order to stub
       // it; the rules here are about the shipped component, not about how it is exercised.
-      .filter((name) => !name.endsWith(".test.ts") && !name.endsWith("test-fixtures.ts"))
+      .filter((name) => !name.endsWith(".test.ts") && !name.startsWith("testing/"))
   );
 }
 

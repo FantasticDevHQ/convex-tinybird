@@ -11,6 +11,7 @@
 import type * as canonical from "../canonical.js";
 import type * as classify from "../classify.js";
 import type * as contract from "../contract.js";
+import type * as credentials from "../credentials.js";
 import type * as deliver from "../deliver.js";
 import type * as destination from "../destination.js";
 import type * as lib from "../lib.js";
@@ -28,6 +29,7 @@ const fullApi: ApiFromModules<{
   canonical: typeof canonical;
   classify: typeof classify;
   contract: typeof contract;
+  credentials: typeof credentials;
   deliver: typeof deliver;
   destination: typeof destination;
   lib: typeof lib;
