@@ -28,5 +28,8 @@
     "convex-test": "^0.0.55",
     "vite": "8.2.1",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@convex-dev/workpool": "0.4.10"
   }
 }

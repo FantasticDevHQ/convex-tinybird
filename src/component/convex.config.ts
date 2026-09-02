@@ -1,3 +1,4 @@
+import workpool from "@convex-dev/workpool/convex.config";
 import { defineComponent } from "convex/server";
 import { v } from "convex/values";
 
@@ -25,5 +26,12 @@ const component = defineComponent("tinybird", {
     TINYBIRD_HOST: v.optional(v.string()),
   },
 });
+
+/**
+ * Delivery runs on a nested Workpool: it owns scheduling, parallelism and (from the next
+ * layer) retry policy, so this component never calls `ctx.scheduler` itself. One mounted
+ * Tinybird instance gets exactly one pool, so two host mounts cannot contend.
+ */
+component.use(workpool);
 
 export default component;

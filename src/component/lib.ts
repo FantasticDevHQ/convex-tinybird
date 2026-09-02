@@ -1,7 +1,20 @@
-import { ConvexError, v } from "convex/values";
+import { vOnCompleteArgs } from "@convex-dev/workpool";
+import { ConvexError, type Infer, v } from "convex/values";
 
 import { canonicalJson, utf8Length } from "./canonical";
-import { env, mutation, query, type QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import {
+  env,
+  internalMutation,
+  internalQuery,
+  mutation,
+  type MutationCtx,
+  query,
+  type QueryCtx,
+} from "./_generated/server";
+import { pool } from "./pool";
+import { sanitizeMessage } from "./sanitize";
 import {
   type BoundedCount,
   COUNT_CAP,
@@ -11,9 +24,11 @@ import {
   HARD_MAX_PAYLOAD_BYTES,
   MAX_EVENT_ID_LENGTH,
   retryConfigViolation,
+  vDeliveryError,
   vEnqueueArgs,
   vEnqueueResult,
   vEventIdentity,
+  vEventState,
   vEventStatus,
   vHealth,
 } from "./contract";
@@ -109,7 +124,7 @@ export const enqueue = mutation({
     }
 
     const now = Date.now();
-    await ctx.db.insert("events", {
+    const id = await ctx.db.insert("events", {
       datasource: args.datasource,
       eventId,
       payload,
@@ -120,6 +135,7 @@ export const enqueue = mutation({
       updatedAt: now,
       ...(args.retry ? { retry: args.retry } : {}),
     });
+    await scheduleDelivery(ctx, id);
     return { outcome: "enqueued" as const, eventId, state: "pending" as const };
   },
 });
@@ -145,3 +161,151 @@ export const getStatus = query({
     };
   },
 });
+
+// ---------------------------------------------------------------------------- delivery
+
+/**
+ * Hand one event to the delivery pool, if there is anywhere to send it.
+ *
+ * Scheduling is skipped rather than deferred when the component is unconfigured or the
+ * destination is paused: an event with no live work is exactly what `resume` looks for, so
+ * queueing work that would immediately no-op only burns pool capacity.
+ */
+async function scheduleDelivery(ctx: MutationCtx, id: Id<"events">): Promise<void> {
+  if (!hasToken(env.TINYBIRD_TOKEN)) return;
+  const settings = await ctx.db.query("settings").first();
+  if (settings?.paused === true) return;
+  const event = await ctx.db.get(id);
+  if (event === null || event.state !== "pending") return;
+
+  const workId = await pool.enqueueAction(
+    ctx,
+    internal.deliver.deliverEvent,
+    { eventId: id },
+    {
+      retry: event.retry ?? false,
+      onComplete: internal.lib.onDeliveryComplete,
+      context: { eventId: id },
+    },
+  );
+  await ctx.db.patch(id, { workId });
+}
+
+/** What the delivery action needs to build a request. Never includes a credential. */
+export const loadForDelivery = internalQuery({
+  args: { eventId: v.id("events") },
+  returns: v.union(
+    v.null(),
+    v.object({
+      datasource: v.string(),
+      payload: v.string(),
+      state: vEventState,
+      paused: v.boolean(),
+    }),
+  ),
+  handler: async (ctx, { eventId }) => {
+    const event = await ctx.db.get(eventId);
+    if (event === null) return null;
+    const settings = await ctx.db.query("settings").first();
+    return {
+      datasource: event.datasource,
+      payload: event.payload,
+      state: event.state,
+      paused: settings?.paused ?? false,
+    };
+  },
+});
+
+/**
+ * Claim a pending event for one attempt. Returns false when someone else already moved it,
+ * which is what stops two workers from sending the same row twice in the same instant.
+ */
+export const markDelivering = internalMutation({
+  args: { eventId: v.id("events") },
+  returns: v.boolean(),
+  handler: async (ctx, { eventId }) => {
+    const event = await ctx.db.get(eventId);
+    if (event === null || event.state !== "pending") return false;
+    await ctx.db.patch(eventId, {
+      state: "delivering",
+      attempts: event.attempts + 1,
+      updatedAt: Date.now(),
+    });
+    return true;
+  },
+});
+
+/**
+ * Record a confirmed write. Only an in-flight event can be delivered: a late acknowledgement
+ * for an event that already failed must not resurrect it.
+ */
+export const markDelivered = internalMutation({
+  args: { eventId: v.id("events") },
+  returns: v.null(),
+  handler: async (ctx, { eventId }) => {
+    const event = await ctx.db.get(eventId);
+    if (event === null || event.state !== "delivering") return null;
+    const now = Date.now();
+    await ctx.db.patch(eventId, { state: "delivered", deliveredAt: now, updatedAt: now });
+    await patchSettings(ctx, { lastDeliveredAt: now });
+    return null;
+  },
+});
+
+/** Move an event to its dead letter. A delivered event is never un-delivered. */
+export const markFailed = internalMutation({
+  args: { eventId: v.id("events"), error: vDeliveryError },
+  returns: v.null(),
+  handler: async (ctx, { eventId, error }) => {
+    const event = await ctx.db.get(eventId);
+    if (event === null || event.state === "delivered" || event.state === "failed") return null;
+    await ctx.db.patch(eventId, { state: "failed", lastError: error, updatedAt: Date.now() });
+    await patchSettings(ctx, { lastError: error });
+    return null;
+  },
+});
+
+/**
+ * The pool's verdict on one delivery. A thrown attempt arrives here as `failed`; the retry
+ * layer configures how many attempts precede that, so by the time this runs the budget is
+ * spent and the event is a dead letter.
+ */
+export const onDeliveryComplete = internalMutation({
+  args: vOnCompleteArgs(v.object({ eventId: v.id("events") })),
+  returns: v.null(),
+  handler: async (ctx, { context, result }) => {
+    const eventId = context.eventId;
+    if (result.kind === "failed") {
+      const event = await ctx.db.get(eventId);
+      if (event === null || event.state === "delivered" || event.state === "failed") return null;
+      const error = {
+        category: "exhausted" as const,
+        message: sanitizeMessage(result.error, env.TINYBIRD_TOKEN),
+        at: Date.now(),
+      };
+      await ctx.db.patch(eventId, { state: "failed", lastError: error, updatedAt: Date.now() });
+      await patchSettings(ctx, { lastError: error });
+      return null;
+    }
+    if (result.kind === "canceled") {
+      const event = await ctx.db.get(eventId);
+      if (event !== null && event.state === "delivering") {
+        await ctx.db.patch(eventId, { state: "pending", updatedAt: Date.now() });
+      }
+    }
+    return null;
+  },
+});
+
+/** Creates the single settings row on first write. */
+async function patchSettings(
+  ctx: MutationCtx,
+  patch: { lastDeliveredAt?: number; lastError?: Infer<typeof vDeliveryError> },
+): Promise<void> {
+  const settings = await ctx.db.query("settings").first();
+  if (settings === null) {
+    await ctx.db.insert("settings", { paused: false, ...patch });
+    return;
+  }
+  await ctx.db.patch(settings._id, patch);
+}

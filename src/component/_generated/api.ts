@@ -9,8 +9,13 @@
  */
 
 import type * as canonical from "../canonical.js";
+import type * as classify from "../classify.js";
 import type * as contract from "../contract.js";
+import type * as deliver from "../deliver.js";
+import type * as destination from "../destination.js";
 import type * as lib from "../lib.js";
+import type * as pool from "../pool.js";
+import type * as sanitize from "../sanitize.js";
 
 import type {
   ApiFromModules,
@@ -21,8 +26,13 @@ import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
   canonical: typeof canonical;
+  classify: typeof classify;
   contract: typeof contract;
+  deliver: typeof deliver;
+  destination: typeof destination;
   lib: typeof lib;
+  pool: typeof pool;
+  sanitize: typeof sanitize;
 }> = anyApi as any;
 
 /**
@@ -51,4 +61,6 @@ export const internal: FilterApi<
   FunctionReference<any, "internal">
 > = anyApi as any;
 
-export const components = componentsGeneric() as unknown as {};
+export const components = componentsGeneric() as unknown as {
+  workpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"workpool">;
+};

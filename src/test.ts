@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import workpool from "@convex-dev/workpool/test";
 import type { TestConvex } from "convex-test";
 import type { GenericSchema, SchemaDefinition } from "convex/server";
 
@@ -15,4 +16,7 @@ export function register(
   name = "tinybird",
 ): void {
   t.registerComponent(name, schema, modules);
+  // Delivery runs on a nested Workpool, so a host test that never registers it would fail
+  // the moment an enqueue schedules work. Mirrors @convex-dev/workpool's own test helper.
+  workpool.register(t, `${name}/workpool`);
 }
