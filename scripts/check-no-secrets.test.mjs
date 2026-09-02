@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { checkNoSecrets } from "./check-no-secrets.mjs";
+import { checkNoSecrets, TOKEN_ALLOWED_FILES } from "./check-no-secrets.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => join(here, "fixtures", name);
@@ -36,4 +36,14 @@ test("serializing the component env is rejected even though it names no secret",
   const failures = checkNoSecrets(fixture("enumerates-env"));
   assert.equal(failures.length, 1);
   assert.match(failures[0], /enumerated, spread or serialized/);
+});
+
+test("the allowlist stays two files, so it cannot quietly widen again", () => {
+  // The gate is only as good as this list. It began by exempting the largest source file
+  // wholesale, which let any credential read inside it pass; asserting the contents is what
+  // stops that being reintroduced without someone deciding to.
+  assert.deepEqual([...TOKEN_ALLOWED_FILES].sort(), [
+    "component/convex.config.ts",
+    "component/credentials.ts",
+  ]);
 });
