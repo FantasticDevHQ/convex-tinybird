@@ -12,7 +12,11 @@ import type * as canonical from "../canonical.js";
 import type * as contract from "../contract.js";
 import type * as lib from "../lib.js";
 
-import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server";
+import type {
+  ApiFromModules,
+  FilterApi,
+  FunctionReference,
+} from "convex/server";
 import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
@@ -29,7 +33,10 @@ const fullApi: ApiFromModules<{
  * const myFunctionReference = api.myModule.myFunction;
  * ```
  */
-export const api: FilterApi<typeof fullApi, FunctionReference<any, "public">> = anyApi as any;
+export const api: FilterApi<
+  typeof fullApi,
+  FunctionReference<any, "public">
+> = anyApi as any;
 
 /**
  * A utility for referencing Convex functions in your app's internal API.

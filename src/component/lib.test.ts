@@ -106,6 +106,7 @@ describe("enqueue", () => {
   it("returns duplicate for the same identity and an equivalent payload in another key order", async () => {
     const t = unconfigured();
     await t.mutation(api.lib.enqueue, { datasource: "events", eventId: "evt_1", payload: row });
+    const before = await t.run((ctx) => ctx.db.query("events").take(10));
 
     const again = await t.mutation(api.lib.enqueue, {
       datasource: "events",
@@ -114,7 +115,9 @@ describe("enqueue", () => {
     });
 
     expect(again).toEqual({ outcome: "duplicate", eventId: "evt_1", state: "pending" });
-    expect(await t.run((ctx) => ctx.db.query("events").take(10))).toHaveLength(1);
+    // Whole-row equality, not just the count: a duplicate that bumped `attempts` or
+    // `updatedAt` would otherwise pass while quietly rewriting a row it must not touch.
+    expect(await t.run((ctx) => ctx.db.query("events").take(10))).toEqual(before);
   });
 
   it("throws identity_conflict for the same identity with a different payload and leaves the row untouched", async () => {
