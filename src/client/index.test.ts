@@ -2,6 +2,7 @@ import { getFunctionName, makeFunctionReference } from "convex/server";
 
 import {
   DEFAULT_MAX_PAYLOAD_BYTES,
+  DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_RETRY,
   HARD_MAX_PAYLOAD_BYTES,
 } from "../component/contract";
@@ -106,6 +107,17 @@ describe("TinybirdDelivery.enqueue", () => {
 
     expect(calls[0].args.retry).toEqual(DEFAULT_RETRY);
     expect(calls[0].args.maxPayloadBytes).toBe(DEFAULT_MAX_PAYLOAD_BYTES);
+    // An option the client validates but never sends is a silent no-op. The component
+    // honours this one, so the only thing left to prove is that it arrives.
+    expect(calls[0].args.requestTimeoutMs).toBe(DEFAULT_REQUEST_TIMEOUT_MS);
+  });
+
+  it("sends a configured request deadline rather than the default", async () => {
+    const { calls, ctx } = capturing();
+
+    await new TinybirdDelivery(component, { requestTimeoutMs: 3_000 }).enqueue(ctx, event);
+
+    expect(calls[0].args.requestTimeoutMs).toBe(3_000);
   });
 
   it("sends the instance policy when one is configured", async () => {

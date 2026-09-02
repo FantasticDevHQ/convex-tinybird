@@ -22,19 +22,32 @@ import { fileURLToPath } from "node:url";
 /** Files allowed to touch the token, and why. */
 export const TOKEN_ALLOWED_FILES = new Set([
   "component/convex.config.ts", // declares the variable; declaring is not reading
-  "component/deliver.ts", // builds the Authorization header
-  "component/lib.ts", // passes it to the sanitizer for redaction
+  "component/credentials.ts", // the one reader, deliberately two functions long
 ]);
 
-const CONSOLE_PATTERN = /(^|[^\w.])console\s*\.\s*\w+/u;
+// A bare `console` identifier, not only `console.log`. Aliasing it (`const c = console`),
+// reaching it through a global (`globalThis.console`) or indexing it (`console["log"]`) all
+// print just the same, and a component that never logs has no reason to name it at all.
+const CONSOLE_PATTERN = /\bconsole\b/u;
 const TOKEN_PATTERN = /TINYBIRD_TOKEN/u;
+/**
+ * Forms that carry the token without naming it. Enumerating or spreading the component's
+ * env hands every declared secret to whatever consumes the result, which is the leak a
+ * name-based rule cannot see.
+ */
+const ENV_BULK_PATTERN =
+  /Object\s*\.\s*(?:entries|keys|values|assign)\s*\(\s*env\b|JSON\s*\.\s*stringify\s*\(\s*env\b|\.\.\.\s*env\b/u;
 
 function sourceFiles(dir) {
-  return readdirSync(dir, { recursive: true })
-    .map((name) => String(name).split(sep).join("/"))
-    .filter((name) => /\.(ts|tsx|mts)$/.test(name))
-    .filter((name) => !name.split("/").includes("_generated"))
-    .filter((name) => !name.endsWith(".test.ts"));
+  return (
+    readdirSync(dir, { recursive: true })
+      .map((name) => String(name).split(sep).join("/"))
+      .filter((name) => /\.(ts|tsx|mts)$/.test(name))
+      .filter((name) => !name.split("/").includes("_generated"))
+      // Test files and their shared harness legitimately name the variable in order to stub
+      // it; the rules here are about the shipped component, not about how it is exercised.
+      .filter((name) => !name.endsWith(".test.ts") && !name.endsWith("test-fixtures.ts"))
+  );
 }
 
 /** One failure per violation; an empty array means the package is clean. */
@@ -50,6 +63,9 @@ export function checkNoSecrets(packageRoot) {
       }
       if (TOKEN_PATTERN.test(line) && !TOKEN_ALLOWED_FILES.has(file)) {
         failures.push(`${where}: the append token must not be referenced here`);
+      }
+      if (ENV_BULK_PATTERN.test(line)) {
+        failures.push(`${where}: the component env must not be enumerated, spread or serialized`);
       }
     });
   }

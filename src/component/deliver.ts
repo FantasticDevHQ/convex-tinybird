@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 
 import { classifyResponse } from "./classify";
+import { readAppendToken } from "./credentials";
 import { eventsUrl, resolveDestination } from "./destination";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -46,7 +47,7 @@ export const deliverEvent = internalAction({
       return { outcome: "skipped" as const };
     }
 
-    const token = env.TINYBIRD_TOKEN ?? "";
+    const token = readAppendToken();
     // Unconfigured or paused: leave the event pending so a later resume can drain it.
     // Returning rather than throwing keeps this out of the failure budget.
     if (token.trim() === "" || loaded.paused) return { outcome: "deferred" as const };

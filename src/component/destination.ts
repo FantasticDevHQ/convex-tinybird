@@ -40,9 +40,6 @@ export function resolveDestination(configured: string | undefined): ResolvedDest
   if (url.protocol === "http:" && !LOOPBACK_HOSTNAMES.has(url.hostname)) {
     return { ok: false, reason: "TINYBIRD_HOST must use https except for a loopback address" };
   }
-  if (url.hostname === "") {
-    return { ok: false, reason: "TINYBIRD_HOST has no host" };
-  }
   // Only slashes is still a bare origin; anything else is a path we would concatenate onto.
   if (url.pathname.replaceAll("/", "") !== "") {
     return { ok: false, reason: "TINYBIRD_HOST must be a bare origin, with no path" };

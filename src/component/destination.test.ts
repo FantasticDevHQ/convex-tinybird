@@ -18,6 +18,16 @@ describe("resolveDestination — accepted", () => {
     });
   });
 
+  it("returns a normalised origin rather than whatever was typed", () => {
+    // Everything downstream concatenates onto this, so it has to be an origin and not the
+    // operator's formatting: an uppercase scheme, a default port and a trailing path all
+    // resolve to the same base URL.
+    expect(resolveDestination("HTTPS://API.TINYBIRD.CO:443/")).toEqual({
+      ok: true,
+      host: "https://api.tinybird.co",
+    });
+  });
+
   it("accepts plain http only for a loopback address, which is Tinybird Local", () => {
     expect(resolveDestination("http://localhost:7181")).toEqual({
       ok: true,

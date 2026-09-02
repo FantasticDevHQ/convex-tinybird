@@ -33,7 +33,10 @@ describe("an invalid host", () => {
     await drain(t);
 
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(await statusOf(t)).toMatchObject({ state: "pending" });
+    // `attempts: 0` is the load-bearing half: resolving the host after claiming the event
+    // would still leave it pending, but would burn an attempt per event in the backlog for
+    // a configuration fault that never reached the network.
+    expect(await statusOf(t)).toMatchObject({ state: "pending", attempts: 0 });
     expect(await t.query(api.lib.health, {})).toMatchObject({
       paused: true,
       pausedReason: "invalid_host",

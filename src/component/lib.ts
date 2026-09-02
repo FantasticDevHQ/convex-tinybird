@@ -7,7 +7,6 @@ import { canonicalJson, utf8Length } from "./canonical";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
-  env,
   internalMutation,
   internalQuery,
   mutation,
@@ -15,6 +14,7 @@ import {
   query,
   type QueryCtx,
 } from "./_generated/server";
+import { hasAppendToken, readAppendToken } from "./credentials";
 import { pool } from "./pool";
 import { sanitizeMessage } from "./sanitize";
 import {
@@ -39,11 +39,6 @@ import {
   vHealth,
 } from "./contract";
 
-/** Present and non-blank. `convex env set X ""` leaves a variable present-but-empty. */
-function hasToken(value: string | undefined): boolean {
-  return typeof value === "string" && value.trim() !== "";
-}
-
 /** Reads at most `COUNT_CAP + 1` rows so health stays cheap on a large outbox. */
 async function boundedCount(ctx: QueryCtx, state: EventState): Promise<BoundedCount> {
   const rows = await ctx.db
@@ -67,7 +62,7 @@ export const health = query({
       boundedCount(ctx, "failed"),
     ]);
     return {
-      configured: hasToken(env.TINYBIRD_TOKEN),
+      configured: hasAppendToken(),
       paused: settings?.paused ?? false,
       pausedReason: settings?.pausedReason,
       counts: { pending, delivering, failed },
@@ -193,7 +188,7 @@ export const getStatus = query({
  * queueing work that would immediately no-op only burns pool capacity.
  */
 async function scheduleDelivery(ctx: MutationCtx, id: Id<"events">): Promise<void> {
-  if (!hasToken(env.TINYBIRD_TOKEN)) return;
+  if (!hasAppendToken()) return;
   const settings = await ctx.db.query("settings").first();
   if (settings?.paused === true) return;
   const event = await ctx.db.get(id);
@@ -369,7 +364,7 @@ export const onDeliveryComplete = internalMutation({
       if (event === null || event.state === "delivered" || event.state === "failed") return null;
       const error = {
         category: "exhausted" as const,
-        message: sanitizeMessage(result.error, env.TINYBIRD_TOKEN),
+        message: sanitizeMessage(result.error, readAppendToken()),
         at: Date.now(),
       };
       await ctx.db.patch(eventId, {
