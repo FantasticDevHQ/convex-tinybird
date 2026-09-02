@@ -70,5 +70,11 @@ do {
 } while (requeued > 0);
 ```
 
+`resume` only picks up events the delivery pool is not already working on. An event that is
+`pending` between two retry attempts needs no operator, and queueing a second work item for it
+would give it a second retry budget and let it be sent more times than its policy allows. That is
+also what makes the loop above terminate: each call schedules what it picks up, so the next call
+finds nothing left to do.
+
 `pause` and `resume` record who acted. The component authenticates nobody, so wrap them in host
 mutations that authorize the caller.

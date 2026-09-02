@@ -21,6 +21,8 @@ import {
   type BoundedCount,
   COUNT_CAP,
   DEFAULT_RESUME_LIMIT,
+  RESUME_SCAN_CAP,
+  RESUME_SCAN_FACTOR,
   MAX_ERROR_HISTORY,
   DATASOURCE_NAME_PATTERN,
   DEFAULT_MAX_PAYLOAD_BYTES,
@@ -341,6 +343,12 @@ export const onDeliveryComplete = internalMutation({
   returns: v.null(),
   handler: async (ctx, { context, result }) => {
     const eventId = context.eventId;
+    // The pool is done with this event either way, so the live-work marker goes now.
+    // `resume` reads it to tell "waiting for a worker" from "waiting for an operator".
+    const finished = await ctx.db.get(eventId);
+    if (finished !== null && finished.workId !== undefined) {
+      await ctx.db.patch(eventId, { workId: undefined });
+    }
     if (result.kind === "failed") {
       const event = await ctx.db.get(eventId);
       if (event === null || event.state === "delivered" || event.state === "failed") return null;
@@ -463,13 +471,21 @@ export const resume = mutation({
       lastOperatorAction: { kind: "resume" as const, actor, at: Date.now() },
     });
 
-    // Only events with no live work: anything already queued would be delivered twice.
-    const waiting = await ctx.db
+    // Only events the pool is NOT already working on. A row can be `pending` because it is
+    // waiting for an operator, or because an attempt failed and the pool is about to try
+    // again; queueing a second work item for the latter gives the event two independent
+    // retry budgets and lets it be sent more times than its policy allows.
+    //
+    // The scan is bounded separately from the batch so that rows with live work, which need
+    // no resuming, cannot fill the window and hide the ones that do.
+    const scanned = await ctx.db
       .query("events")
       .withIndex("by_state_createdAt", (q) => q.eq("state", "pending"))
-      .take(batch);
+      .take(Math.min(batch * RESUME_SCAN_FACTOR, RESUME_SCAN_CAP));
     let requeued = 0;
-    for (const event of waiting) {
+    for (const event of scanned) {
+      if (requeued >= batch) break;
+      if (event.workId !== undefined) continue;
       await scheduleDelivery(ctx, event._id);
       requeued += 1;
     }

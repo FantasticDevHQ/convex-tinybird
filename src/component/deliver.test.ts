@@ -3,7 +3,7 @@ import type { WorkId } from "@convex-dev/workpool";
 import workpool from "@convex-dev/workpool/test";
 
 import { api, internal } from "./_generated/api";
-import { DEFAULT_RETRY, MAX_ERROR_HISTORY } from "./contract";
+import { DEFAULT_RESUME_LIMIT, DEFAULT_RETRY, MAX_ERROR_HISTORY } from "./contract";
 import type { Doc } from "./_generated/dataModel";
 import schema from "./schema";
 
@@ -658,5 +658,135 @@ describe("resume", () => {
     const t = setup();
 
     expect(await t.mutation(api.lib.resume, {})).toEqual({ paused: false, requeued: 0 });
+  });
+});
+
+describe("resume and live work", () => {
+  it("does not requeue an event the pool is already working on", async () => {
+    // The row is `pending` because an attempt is queued, not because it needs an operator.
+    // Queueing a second work item for it would give the event two independent retry
+    // budgets, which is how one event gets sent more times than its policy allows.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(200, { successful_rows: 1, quarantined_rows: 0 })),
+    );
+    const t = setup();
+    await enqueueOne(t);
+
+    expect(await t.mutation(api.lib.resume, {})).toEqual({ paused: false, requeued: 0 });
+  });
+
+  it("never sends an event more times than its retry policy allows", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(503, null));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await t.mutation(api.lib.enqueue, {
+      datasource: "events",
+      eventId: "evt_1",
+      payload: row,
+      retry: { maxAttempts: 2, initialBackoffMs: 100, base: 2 },
+    });
+
+    // An operator resuming while the pool is mid-retry must not add a second budget.
+    await t.mutation(api.lib.resume, {});
+    await drain(t);
+
+    expect(fetchSpy.mock.calls).toHaveLength(2);
+    expect(await statusOf(t)).toMatchObject({ state: "failed", attempts: 2 });
+  });
+
+  it("terminates the documented drain loop instead of requeueing the same rows forever", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(401, null)));
+    const t = setup();
+    await enqueueOne(t);
+    await drain(t);
+    for (const id of ["evt_2", "evt_3"]) {
+      await t.mutation(api.lib.enqueue, {
+        datasource: "events",
+        eventId: id,
+        payload: { ...row, event_id: id },
+      });
+    }
+
+    // The README tells hosts to loop until `resume` reports nothing left. Run that loop
+    // WITHOUT letting the pool run in between, which is the case where a resume that
+    // ignored live work would report the same rows forever.
+    const reported: number[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const { requeued } = await t.mutation(api.lib.resume, { limit: 10 });
+      reported.push(requeued);
+      if (requeued === 0) break;
+    }
+
+    expect(reported).toEqual([3, 0]);
+  });
+});
+
+describe("resume batch bounds", () => {
+  /** Inserts rows straight into the table; the point here is the batch, not delivery. */
+  async function seedPending(t: ReturnType<typeof convexTest>, count: number) {
+    await t.run(async (ctx) => {
+      for (let i = 0; i < count; i += 1) {
+        await ctx.db.insert("events", {
+          datasource: "events",
+          eventId: `seed_${i}`,
+          payload: '{"seed":1}',
+          payloadBytes: 11,
+          state: "pending" as const,
+          attempts: 0,
+          createdAt: Date.now() + i,
+          updatedAt: Date.now() + i,
+        });
+      }
+    });
+  }
+
+  it("never requeues more than the documented maximum in one call", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(503, null)));
+    const t = setup();
+    await seedPending(t, DEFAULT_RESUME_LIMIT + 5);
+
+    // A host asking for more than the cap gets the cap, so one mutation cannot exceed
+    // Convex's transaction limits however it is called.
+    expect(await t.mutation(api.lib.resume, { limit: 10_000 })).toEqual({
+      paused: false,
+      requeued: DEFAULT_RESUME_LIMIT,
+    });
+  });
+
+  it.each([0, -5])("treats a limit of %i as one rather than none or an error", async (limit) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(503, null)));
+    const t = setup();
+    await seedPending(t, 3);
+
+    expect(await t.mutation(api.lib.resume, { limit })).toEqual({ paused: false, requeued: 1 });
+  });
+});
+
+describe("marking a pause", () => {
+  it.each([
+    ["one that is only queued", false],
+    ["one that already delivered", true],
+  ])("does not rewrite the state of an event %s", async (_label, deliverFirst) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(200, { successful_rows: 1, quarantined_rows: 0 })),
+    );
+    const t = setup(deliverFirst ? "p.token" : "");
+    await enqueueOne(t);
+    if (deliverFirst) await drain(t);
+    const before = await statusOf(t);
+    const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
+
+    await t.mutation(internal.lib.markPaused, {
+      eventId,
+      reason: "unauthorized",
+      error: { category: "unauthorized", message: "refused", at: Date.now() },
+    });
+
+    // The destination pauses either way, but only an in-flight event goes back to the queue.
+    const after = await statusOf(t);
+    expect(after?.state).toBe(before?.state);
+    expect((await t.query(api.lib.health, {})).paused).toBe(true);
   });
 });
