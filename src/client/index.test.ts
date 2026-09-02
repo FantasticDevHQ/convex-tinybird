@@ -1,12 +1,17 @@
 import { getFunctionName, makeFunctionReference } from "convex/server";
 
-import { HARD_MAX_PAYLOAD_BYTES } from "../component/contract";
-import { type RunQueryCtx, TinybirdDelivery } from "./index";
+import {
+  DEFAULT_MAX_PAYLOAD_BYTES,
+  DEFAULT_RETRY,
+  HARD_MAX_PAYLOAD_BYTES,
+} from "../component/contract";
+import { type RunMutationCtx, type RunQueryCtx, TinybirdDelivery } from "./index";
 
 /** A stand-in for `components.tinybird`; only the shape the client touches. */
 const component = {
   lib: {
     health: makeFunctionReference<"query">("lib:health"),
+    enqueue: makeFunctionReference<"mutation">("lib:enqueue"),
   },
 } as never;
 
@@ -74,5 +79,54 @@ describe("TinybirdDelivery.health", () => {
     expect(calls).toHaveLength(1);
     expect(getFunctionName(calls[0].reference)).toBe("lib:health");
     expect(calls[0].args).toEqual({});
+  });
+});
+
+describe("TinybirdDelivery.enqueue", () => {
+  type Reference = Parameters<RunMutationCtx["runMutation"]>[0];
+
+  /** Captures what the client actually sends to the component. */
+  function capturing() {
+    const calls: Array<{ reference: Reference; args: Record<string, unknown> }> = [];
+    const ctx: RunMutationCtx = {
+      runMutation: ((reference: Reference, args: Record<string, unknown>) => {
+        calls.push({ reference, args });
+        return Promise.resolve({ outcome: "enqueued", eventId: "evt_1", state: "pending" });
+      }) as unknown as RunMutationCtx["runMutation"],
+    };
+    return { calls, ctx };
+  }
+
+  const event = { datasource: "events", eventId: "evt_1", payload: { a: 1 } };
+
+  it("sends the shipped default policy when the caller sets none", async () => {
+    const { calls, ctx } = capturing();
+
+    await new TinybirdDelivery(component, {}).enqueue(ctx, event);
+
+    expect(calls[0].args.retry).toEqual(DEFAULT_RETRY);
+    expect(calls[0].args.maxPayloadBytes).toBe(DEFAULT_MAX_PAYLOAD_BYTES);
+  });
+
+  it("sends the instance policy when one is configured", async () => {
+    const { calls, ctx } = capturing();
+    const delivery = new TinybirdDelivery(component, { retry: { maxAttempts: 2 } });
+
+    await delivery.enqueue(ctx, event);
+
+    // The instance overrides only what it names; the rest stays at the documented default.
+    expect(calls[0].args.retry).toEqual({ ...DEFAULT_RETRY, maxAttempts: 2 });
+  });
+
+  it("lets a single call override the instance policy without changing it", async () => {
+    const { calls, ctx } = capturing();
+    const delivery = new TinybirdDelivery(component, { retry: { maxAttempts: 2 } });
+
+    await delivery.enqueue(ctx, { ...event, retry: { maxAttempts: 5 } });
+    await delivery.enqueue(ctx, event);
+
+    expect(calls[0].args.retry).toEqual({ ...DEFAULT_RETRY, maxAttempts: 5 });
+    // The next call is unaffected: a per-call override must not mutate the instance.
+    expect(calls[1].args.retry).toEqual({ ...DEFAULT_RETRY, maxAttempts: 2 });
   });
 });

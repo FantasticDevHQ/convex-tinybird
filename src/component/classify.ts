@@ -29,6 +29,11 @@ const ACCEPTED_STATUSES = new Set([200, 202]);
 
 /** Statuses that mean "try again later" rather than "this row is wrong". */
 const RETRYABLE_STATUSES: ReadonlyMap<number, FailureCategory> = new Map([
+  // Retryable for now, and reported honestly: an operator reading the history of a refused
+  // token must not see "server error". The next layer turns this into a destination pause
+  // instead of spending the whole budget.
+  [401, "unauthorized"],
+  [403, "unauthorized"],
   [429, "rate_limited"],
   [500, "server_error"],
   [502, "server_error"],

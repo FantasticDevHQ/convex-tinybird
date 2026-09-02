@@ -3,6 +3,7 @@ import type { WorkId } from "@convex-dev/workpool";
 import workpool from "@convex-dev/workpool/test";
 
 import { api, internal } from "./_generated/api";
+import { DEFAULT_RETRY, MAX_ERROR_HISTORY } from "./contract";
 import type { Doc } from "./_generated/dataModel";
 import schema from "./schema";
 
@@ -368,6 +369,7 @@ describe("a failed attempt is recorded", () => {
   it.each([
     ["a rate limit", 429, "rate_limited"],
     ["a server error", 503, "server_error"],
+    ["a refused token", 401, "unauthorized"],
   ])(
     "records %s with its category while the event waits for the next attempt",
     async (_l, status, category) => {
@@ -384,7 +386,10 @@ describe("a failed attempt is recorded", () => {
       expect(status_).toMatchObject({ attempts: 1 });
       expect(status_?.lastError?.message).toContain(String(status));
       expect((await settingsOf(t))?.lastError).toBeDefined();
-      expect(category).toBeTruthy();
+      // The attempt's own category has to reach the history: once the budget is spent
+      // `lastError` reads `exhausted`, so this is the only place it survives. Asserting
+      // the table value itself, as this once did, tests nothing.
+      expect(status_?.previousErrors?.map((e) => e.category)).toEqual([category]);
     },
   );
 
@@ -462,14 +467,41 @@ describe("an exhausted budget", () => {
     expect(scheduled.filter((s) => s.state.kind === "pending")).toEqual([]);
   });
 
-  it("uses the instance default policy when the caller sets none", async () => {
+  it("makes a single attempt when no policy is stored at all", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(503, null)));
     const t = setup();
-    // No `retry` argument: the stored policy is absent and the pool applies a single attempt.
+    // Calling the component directly with no `retry`: the absence of a policy, which is not
+    // the same thing as the client's default. That default is covered below.
     await enqueueOne(t);
     await drain(t);
 
     expect(await statusOf(t)).toMatchObject({ state: "failed", attempts: 1 });
+  });
+
+  it("spends the shipped default policy and keeps a bounded history of the attempts", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(503, null));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    // DEFAULT_RETRY is what `TinybirdDelivery.enqueue` sends when a caller sets nothing, so
+    // this is the policy every host gets by default.
+    await t.mutation(api.lib.enqueue, {
+      datasource: "events",
+      eventId: "evt_1",
+      payload: row,
+      retry: DEFAULT_RETRY,
+    });
+    await drain(t);
+
+    expect(fetchSpy.mock.calls).toHaveLength(DEFAULT_RETRY.maxAttempts);
+    const final = await statusOf(t);
+    expect(final).toMatchObject({
+      state: "failed",
+      attempts: DEFAULT_RETRY.maxAttempts,
+      lastError: { category: "exhausted" },
+    });
+    // Eight attempts, five kept: the cap is what stops a permanently failing event from
+    // growing its own row without bound.
+    expect(final?.previousErrors).toHaveLength(MAX_ERROR_HISTORY);
   });
 });
 
@@ -488,5 +520,34 @@ describe("stored errors never leak", () => {
     expect(serialized).not.toContain("p.append-token");
     expect(serialized).not.toContain(bodyMarker);
     expect(serialized).not.toContain("wait=true");
+  });
+});
+
+describe("recording an attempt", () => {
+  it.each([
+    ["an event that is only queued", "", false],
+    ["an event that already finished", "p.token", true],
+  ])("refuses to record against %s", async (_label, token, deliverFirst) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(200, { successful_rows: 1, quarantined_rows: 0 })),
+    );
+    const t = setup(token);
+    await enqueueOne(t);
+    if (deliverFirst) await drain(t);
+    const before = await statusOf(t);
+    const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
+
+    await t.mutation(internal.lib.markAttemptFailed, {
+      eventId,
+      error: { category: "server_error", message: "late attempt report", at: Date.now() },
+    });
+
+    // Only an in-flight event can have an attempt recorded against it; anything else would
+    // resurrect a finished event or invent an attempt that never happened.
+    const after = await statusOf(t);
+    expect(after?.state).toBe(before?.state);
+    expect(after?.attempts).toBe(before?.attempts);
+    expect(after?.lastError?.message).not.toBe("late attempt report");
   });
 });

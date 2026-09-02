@@ -83,11 +83,23 @@ describe("classifyResponse — retryable", () => {
     expect(classifyResponse(202, {})).toMatchObject({ kind: "retryable" });
   });
 
+  it("reports a refused token as unauthorized, not as a server error", () => {
+    // Still retryable until the next layer turns it into a destination pause, but an
+    // operator reading the failure history must see why the destination refused the row.
+    for (const status of [401, 403]) {
+      expect(classifyResponse(status, null)).toMatchObject({
+        kind: "retryable",
+        category: "unauthorized",
+        httpStatus: status,
+      });
+    }
+  });
+
   it("retries a status it has no rule for, rather than silently dropping the event", () => {
     // 401 and 403 become a destination pause in a later layer; until then the safe reading
     // of an unknown status is "upstream problem", which retries and then dead-letters
     // rather than discarding the row.
-    for (const status of [401, 403, 418]) {
+    for (const status of [418, 451]) {
       expect(classifyResponse(status, null)).toMatchObject({
         kind: "retryable",
         httpStatus: status,
