@@ -28,7 +28,9 @@ export const COUNT_CAP = 1000;
 
 // ---------------------------------------------------------------------------- request policy
 
+/** Per-request deadline for one delivery attempt (`AbortSignal.timeout`). */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+/** Hosts may tune the deadline only inside this range. */
 export const REQUEST_TIMEOUT_RANGE_MS = { min: 1_000, max: 60_000 } as const;
 
 /** Retry policy handed to the nested Workpool: attempts and exponential backoff. */
@@ -42,7 +44,9 @@ export const vRetryConfig = v.object({
 });
 export type RetryConfig = Infer<typeof vRetryConfig>;
 
+/** About four minutes of exponential backoff before an event dead-letters. */
 export const DEFAULT_RETRY: RetryConfig = { maxAttempts: 8, initialBackoffMs: 1_000, base: 2 };
+/** Bounds enforced on every retry policy, whether set per instance or per enqueue. */
 export const RETRY_LIMITS = {
   maxAttempts: { min: 1, max: 20 },
   initialBackoffMs: { min: 100, max: 60_000 },
@@ -166,6 +170,10 @@ export const vBoundedCount = v.object({
 });
 export type BoundedCount = Infer<typeof vBoundedCount>;
 
+/**
+ * Delivery health for operators: configuration and pause state plus bounded backlog
+ * counts. Never carries a payload, host or token.
+ */
 export const vHealth = v.object({
   /** Append token present and non-blank. */
   configured: v.boolean(),
