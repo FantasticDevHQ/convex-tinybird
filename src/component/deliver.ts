@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 
 import { classifyResponse } from "./classify";
-import { eventsUrl, resolveHost } from "./destination";
+import { eventsUrl, resolveDestination } from "./destination";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, env, internalAction } from "./_generated/server";
@@ -51,11 +51,29 @@ export const deliverEvent = internalAction({
     // Returning rather than throwing keeps this out of the failure budget.
     if (token.trim() === "" || loaded.paused) return { outcome: "deferred" as const };
 
+    // Resolve the destination BEFORE claiming: a bad host is a configuration fault, not a
+    // delivery attempt, and it must not consume the event's budget or leave it in flight.
+    const destination = resolveDestination(env.TINYBIRD_HOST);
+    if (!destination.ok) {
+      await ctx.runMutation(internal.lib.markPaused, {
+        eventId,
+        reason: "invalid_host",
+        error: { category: "invalid_request", message: destination.reason, at: Date.now() },
+      });
+      return { outcome: "paused" as const };
+    }
+
     const claimed = await ctx.runMutation(internal.lib.markDelivering, { eventId });
     if (!claimed) return { outcome: "skipped" as const };
 
     try {
-      return await attemptDelivery(ctx, eventId, loaded.datasource, loaded.payload, token);
+      return await attemptDelivery(ctx, eventId, {
+        datasource: loaded.datasource,
+        payload: loaded.payload,
+        host: destination.host,
+        requestTimeoutMs: loaded.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        token,
+      });
     } catch (error) {
       // The claim must not outlive the attempt: a retry has to be able to claim it again.
       await ctx.runMutation(internal.lib.releaseForRetry, { eventId });
@@ -68,12 +86,17 @@ export const deliverEvent = internalAction({
 async function attemptDelivery(
   ctx: { runMutation: ActionCtx["runMutation"] },
   eventId: Id<"events">,
-  datasource: string,
-  payload: string,
-  token: string,
+  request: {
+    datasource: string;
+    payload: string;
+    host: string;
+    requestTimeoutMs: number;
+    token: string;
+  },
 ): Promise<DeliveryOutcome> {
   {
-    const url = eventsUrl(resolveHost(env.TINYBIRD_HOST), datasource);
+    const { payload, host, requestTimeoutMs, token } = request;
+    const url = eventsUrl(host, request.datasource);
     let response: Response;
     try {
       response = await fetch(url, {
@@ -86,7 +109,7 @@ async function attemptDelivery(
         body: `${payload}\n`,
         // A redirect could forward the Authorization header to another host.
         redirect: "error",
-        signal: AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(requestTimeoutMs),
       });
     } catch (error) {
       // Timeout, connection loss or a refused redirect: all worth another attempt.

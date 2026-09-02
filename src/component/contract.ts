@@ -121,6 +121,7 @@ export type OperatorAction = Infer<typeof vOperatorAction>;
 
 /** `ConvexError` codes thrown by component functions. */
 export const vErrorCode = v.union(
+  v.literal("invalid_request_timeout"),
   v.literal("invalid_datasource"),
   v.literal("invalid_event_id"),
   v.literal("invalid_payload"),
@@ -147,6 +148,8 @@ export const vEnqueueArgs = v.object({
   payload: v.any(),
   maxPayloadBytes: v.optional(v.number()),
   retry: v.optional(vRetryConfig),
+  /** Per-request deadline. Stored with the event so delivery honours the caller's setting. */
+  requestTimeoutMs: v.optional(v.number()),
 });
 export type EnqueueArgs = Infer<typeof vEnqueueArgs>;
 

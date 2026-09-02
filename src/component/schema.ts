@@ -30,6 +30,7 @@ export const events = defineTable({
   /** Workpool id of the live delivery item, when one is scheduled. */
   workId: v.optional(v.string()),
   retry: v.optional(vRetryConfig),
+  requestTimeoutMs: v.optional(v.number()),
 })
   .index("by_identity", ["datasource", "eventId"])
   .index("by_state_createdAt", ["state", "createdAt"])

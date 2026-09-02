@@ -98,6 +98,7 @@ export class TinybirdDelivery {
       eventId: args.eventId,
       payload: args.payload,
       maxPayloadBytes: this.options.maxPayloadBytes,
+      requestTimeoutMs: this.options.requestTimeoutMs,
       retry: args.retry ? { ...this.options.retry, ...args.retry } : this.options.retry,
     });
   }

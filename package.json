@@ -15,6 +15,7 @@
   },
   "scripts": {
     "check:boundary": "node scripts/check-boundary.mjs",
+    "check:secrets": "node scripts/check-no-secrets.mjs",
     "codegen": "convex codegen --component-dir src/component",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

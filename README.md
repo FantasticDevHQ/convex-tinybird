@@ -17,6 +17,11 @@ This package is being built in layers, and this README describes only what is ac
   refuses the credential, with `pause` and `resume` for operators.
 - **Not implemented yet:** operator replay of dead letters and retention cleanup.
 
+`TINYBIRD_HOST` is validated before any request: it must be a bare `https` origin with no path,
+query, fragment or embedded credentials, the one exception being a loopback address for Tinybird
+Local. A host that fails validation pauses the destination rather than failing events, because the
+rows are fine and the configuration is not.
+
 With no `TINYBIRD_TOKEN` the component is inert by design: enqueue still stores events, nothing
 is scheduled, and no request leaves the deployment.
 

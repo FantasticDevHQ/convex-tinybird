@@ -32,6 +32,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           eventId: string;
           maxPayloadBytes?: number;
           payload: any;
+          requestTimeoutMs?: number;
           retry?: {
             base: number;
             initialBackoffMs: number;

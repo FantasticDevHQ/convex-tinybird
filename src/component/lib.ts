@@ -21,6 +21,7 @@ import {
   type BoundedCount,
   COUNT_CAP,
   DEFAULT_RESUME_LIMIT,
+  REQUEST_TIMEOUT_RANGE_MS,
   MAX_ERROR_HISTORY,
   DATASOURCE_NAME_PATTERN,
   DEFAULT_MAX_PAYLOAD_BYTES,
@@ -95,6 +96,19 @@ export const enqueue = mutation({
     if (eventId.trim() === "" || eventId.length > MAX_EVENT_ID_LENGTH) {
       throw new ConvexError({ code: "invalid_event_id" as const, length: eventId.length });
     }
+    if (args.requestTimeoutMs !== undefined) {
+      const { min, max } = REQUEST_TIMEOUT_RANGE_MS;
+      if (
+        !Number.isFinite(args.requestTimeoutMs) ||
+        args.requestTimeoutMs < min ||
+        args.requestTimeoutMs > max
+      ) {
+        throw new ConvexError({
+          code: "invalid_request_timeout" as const,
+          requestTimeoutMs: args.requestTimeoutMs,
+        });
+      }
+    }
     if (args.retry) {
       const violation = retryConfigViolation(args.retry);
       if (violation) throw new ConvexError({ code: "invalid_retry" as const, reason: violation });
@@ -139,6 +153,7 @@ export const enqueue = mutation({
       createdAt: now,
       updatedAt: now,
       ...(args.retry ? { retry: args.retry } : {}),
+      ...(args.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: args.requestTimeoutMs }),
     });
     await scheduleDelivery(ctx, id);
     return { outcome: "enqueued" as const, eventId, state: "pending" as const };
@@ -207,6 +222,7 @@ export const loadForDelivery = internalQuery({
       payload: v.string(),
       state: vEventState,
       paused: v.boolean(),
+      requestTimeoutMs: v.optional(v.number()),
     }),
   ),
   handler: async (ctx, { eventId }) => {
@@ -218,6 +234,7 @@ export const loadForDelivery = internalQuery({
       payload: event.payload,
       state: event.state,
       paused: settings?.paused ?? false,
+      requestTimeoutMs: event.requestTimeoutMs,
     };
   },
 });
