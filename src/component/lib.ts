@@ -22,15 +22,17 @@ export const health = query({
   returns: vHealth,
   handler: async (ctx) => {
     const settings = await ctx.db.query("settings").first();
+    // Three independent index range scans; there is no ordering between them.
+    const [pending, delivering, failed] = await Promise.all([
+      boundedCount(ctx, "pending"),
+      boundedCount(ctx, "delivering"),
+      boundedCount(ctx, "failed"),
+    ]);
     return {
       configured: hasToken(env.TINYBIRD_TOKEN),
       paused: settings?.paused ?? false,
       pausedReason: settings?.pausedReason,
-      counts: {
-        pending: await boundedCount(ctx, "pending"),
-        delivering: await boundedCount(ctx, "delivering"),
-        failed: await boundedCount(ctx, "failed"),
-      },
+      counts: { pending, delivering, failed },
     };
   },
 });

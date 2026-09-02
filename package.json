@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Convex component that delivers analytics events to Tinybird: transactional enqueue, at-least-once delivery, dedupe by event identity.",
+  "description": "Convex component for shipping analytics events to Tinybird: transactional enqueue, at-least-once delivery and dedupe by event identity.",
   "exports": {
     ".": "./src/client/index.ts",
     "./convex.config": "./src/component/convex.config.ts",
