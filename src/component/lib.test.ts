@@ -8,6 +8,7 @@ const modules = import.meta.glob("./**/*.ts");
 describe("health", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
   it("reports an unconfigured, unpaused component with zero bounded counts", async () => {
@@ -47,7 +48,6 @@ describe("health", () => {
 
     expect(scheduled).toEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
   });
 
   it("treats a blank token as absent", async () => {
