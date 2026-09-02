@@ -12,10 +12,11 @@ This package is being built in layers, and this README describes only what is ac
 
 - **Implemented:** component mount and declared configuration, the `events`/`settings` schema, the
   public contract types and validators, transactional `enqueue` with canonical payload identity,
-  `getStatus`, the `health` query, and delivery of one event per request to the Events API.
-- **Not implemented yet:** retrying a transient failure, pausing a destination whose credentials
-  are refused, operator replay, and retention cleanup. A response this layer has no rule for
-  fails the event rather than being retried.
+  `getStatus`, the `health` query, delivery of one event per request to the Events API, and
+  retrying a transient failure until the budget is spent.
+- **Not implemented yet:** pausing a destination whose credentials are refused, operator replay,
+  and retention cleanup. A refused token currently retries and then dead-letters rather than
+  pausing the destination.
 
 With no `TINYBIRD_TOKEN` the component is inert by design: enqueue still stores events, nothing
 is scheduled, and no request leaves the deployment.
