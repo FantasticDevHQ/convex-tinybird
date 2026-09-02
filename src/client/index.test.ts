@@ -39,6 +39,12 @@ describe("TinybirdDelivery options", () => {
     );
   });
 
+  it("rejects an option it does not support, so configuration is always explicit", () => {
+    expect(
+      () => new TinybirdDelivery(component, { batchSize: 10 } as unknown as Record<string, never>),
+    ).toThrow(/unsupported option "batchSize"/);
+  });
+
   it("rejects retry settings outside their documented ranges", () => {
     expect(() => new TinybirdDelivery(component, { retry: { maxAttempts: 0 } })).toThrow(
       /maxAttempts/,

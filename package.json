@@ -14,9 +14,10 @@
     }
   },
   "scripts": {
+    "check:boundary": "node scripts/check-boundary.mjs",
     "codegen": "convex codegen --component-dir src/component",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
     "convex": "^1.44.0"

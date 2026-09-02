@@ -1,0 +1,7 @@
+{
+  "name": "fixture-bad-dependency",
+  "dependencies": {
+    "convex": "^1.44.0",
+    "better-auth": "^1.6.0"
+  }
+}

@@ -208,10 +208,26 @@ function assertRange(name: string, value: number, min: number, max: number): voi
   }
 }
 
-/** Validates eagerly so a misconfigured instance fails at construction, not at first enqueue. */
+const SUPPORTED_OPTIONS = new Set(["maxPayloadBytes", "requestTimeoutMs", "retry"]);
+const SUPPORTED_RETRY_OPTIONS = new Set(["maxAttempts", "initialBackoffMs", "base"]);
+
+function assertOnlySupportedKeys(value: object, supported: Set<string>, prefix: string): void {
+  for (const key of Object.keys(value)) {
+    if (!supported.has(key)) {
+      throw new Error(`TinybirdDelivery: unsupported option "${prefix}${key}"`);
+    }
+  }
+}
+
+/**
+ * Validates eagerly so a misconfigured instance fails at construction, not at first enqueue.
+ * Unknown keys are rejected too: configuration is explicit, never silently ignored.
+ */
 export function resolveTinybirdDeliveryOptions(
   options: TinybirdDeliveryOptions = {},
 ): ResolvedTinybirdDeliveryOptions {
+  assertOnlySupportedKeys(options, SUPPORTED_OPTIONS, "");
+  if (options.retry) assertOnlySupportedKeys(options.retry, SUPPORTED_RETRY_OPTIONS, "retry.");
   const maxPayloadBytes = options.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
   assertRange("maxPayloadBytes", maxPayloadBytes, 1, HARD_MAX_PAYLOAD_BYTES);
   const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;

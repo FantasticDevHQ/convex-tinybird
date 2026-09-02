@@ -36,6 +36,20 @@ describe("health", () => {
     expect(health.configured).toBe(true);
   });
 
+  it("schedules nothing and touches the network for nothing while unconfigured", async () => {
+    vi.stubEnv("TINYBIRD_TOKEN", "");
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = convexTest(schema, modules);
+
+    await t.query(api.lib.health, {});
+    const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").take(10));
+
+    expect(scheduled).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it("treats a blank token as absent", async () => {
     vi.stubEnv("TINYBIRD_TOKEN", "   ");
     const t = convexTest(schema, modules);

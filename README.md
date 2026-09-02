@@ -18,5 +18,6 @@ This package is being built in layers, and this README describes only what is ac
 Until delivery exists the component is inert by design: with no `TINYBIRD_TOKEN` it schedules
 nothing and makes no outbound request.
 
-Design and conventions: [`docs/architecture.md`](./docs/architecture.md) (added with the isolation
-gate ticket). The full consumer guide lands with the example app.
+Design and conventions: [`docs/architecture.md`](./docs/architecture.md) — state machine, transaction
+boundaries, dedupe window, scheduling ownership. `node scripts/check-boundary.mjs` proves the package
+imports nothing from the host. The full consumer guide lands with the example app.

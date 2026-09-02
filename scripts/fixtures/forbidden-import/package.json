@@ -1,0 +1,6 @@
+{
+  "name": "fixture-forbidden-import",
+  "dependencies": {
+    "convex": "^1.44.0"
+  }
+}

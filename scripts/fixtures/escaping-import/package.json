@@ -1,0 +1,6 @@
+{
+  "name": "fixture-escaping-import",
+  "dependencies": {
+    "convex": "^1.44.0"
+  }
+}

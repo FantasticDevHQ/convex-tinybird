@@ -1,0 +1,13 @@
+{
+  "name": "fixture-clean",
+  "peerDependencies": {
+    "convex": "^1.44.0"
+  },
+  "dependencies": {
+    "@convex-dev/workpool": "0.4.10"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10",
+    "@fantastic-dev/anything-dev-only": "workspace:*"
+  }
+}
