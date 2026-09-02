@@ -18,6 +18,7 @@ import { sanitizeMessage } from "./sanitize";
 import {
   type BoundedCount,
   COUNT_CAP,
+  MAX_ERROR_HISTORY,
   DATASOURCE_NAME_PATTERN,
   DEFAULT_MAX_PAYLOAD_BYTES,
   type EventState,
@@ -158,6 +159,7 @@ export const getStatus = query({
       createdAt: row.createdAt,
       deliveredAt: row.deliveredAt,
       lastError: row.lastError,
+      previousErrors: row.previousErrors,
     };
   },
 });
@@ -236,6 +238,47 @@ export const markDelivering = internalMutation({
 });
 
 /**
+ * Record a failed attempt and return the event to the queue.
+ *
+ * Recording and releasing are one mutation on purpose: an attempt that released without
+ * recording would retry with no trace of why, and one that recorded without releasing would
+ * strand the event. `health` reads the mirrored copy on `settings`, so an operator sees the
+ * newest failure without reading event rows.
+ */
+export const markAttemptFailed = internalMutation({
+  args: { eventId: v.id("events"), error: vDeliveryError },
+  returns: v.null(),
+  handler: async (ctx, { eventId, error }) => {
+    const event = await ctx.db.get(eventId);
+    if (event === null || event.state !== "delivering") return null;
+    await ctx.db.patch(eventId, {
+      state: "pending",
+      lastError: error,
+      previousErrors: pushHistory(event.previousErrors, event.lastError),
+      updatedAt: Date.now(),
+    });
+    await patchSettings(ctx, { lastError: error });
+    return null;
+  },
+});
+
+/**
+ * Keep a bounded history of earlier failures.
+ *
+ * `lastError` alone cannot answer "why did this die": once the budget runs out it reads
+ * `exhausted`, which says the attempts finished but not whether the destination was rate
+ * limiting, timing out, or refusing the token. The cap keeps a permanently failing event
+ * from growing its own row without bound.
+ */
+function pushHistory(
+  history: Infer<typeof vDeliveryError>[] | undefined,
+  previous: Infer<typeof vDeliveryError> | undefined,
+): Infer<typeof vDeliveryError>[] | undefined {
+  if (previous === undefined) return history;
+  return [...(history ?? []), previous].slice(-MAX_ERROR_HISTORY);
+}
+
+/**
  * Return a claimed event to the queue after a failed attempt.
  *
  * Without this a retried attempt is dead on arrival: the pool re-runs the action, the row is
@@ -302,7 +345,14 @@ export const onDeliveryComplete = internalMutation({
         message: sanitizeMessage(result.error, env.TINYBIRD_TOKEN),
         at: Date.now(),
       };
-      await ctx.db.patch(eventId, { state: "failed", lastError: error, updatedAt: Date.now() });
+      await ctx.db.patch(eventId, {
+        state: "failed",
+        lastError: error,
+        // The attempt that actually failed is what an operator needs; `exhausted` only
+        // says the budget ran out.
+        previousErrors: pushHistory(event.previousErrors, event.lastError),
+        updatedAt: Date.now(),
+      });
       await patchSettings(ctx, { lastError: error });
       return null;
     }

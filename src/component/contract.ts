@@ -23,6 +23,9 @@ export const HARD_MAX_PAYLOAD_BYTES = 524_288;
 export const MAX_EVENT_ID_LENGTH = 256;
 /** Tinybird datasource names: letters, digits and underscores only. */
 export const DATASOURCE_NAME_PATTERN = /^[A-Za-z0-9_]{1,128}$/;
+/** How many earlier failures an event keeps alongside its newest one. */
+export const MAX_ERROR_HISTORY = 5;
+
 /** `health` never reads more than this many rows per state. */
 export const COUNT_CAP = 1000;
 
@@ -159,6 +162,12 @@ export const vEventStatus = v.object({
   createdAt: v.number(),
   deliveredAt: v.optional(v.number()),
   lastError: v.optional(vDeliveryError),
+  /**
+   * Earlier failures, oldest first, capped at {@link MAX_ERROR_HISTORY}. Once a budget is
+   * spent `lastError` reads `exhausted`, which says the attempts ran out but not why; the
+   * history is where the actual reason lives.
+   */
+  previousErrors: v.optional(v.array(vDeliveryError)),
 });
 export type EventStatus = Infer<typeof vEventStatus>;
 

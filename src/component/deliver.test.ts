@@ -3,6 +3,7 @@ import type { WorkId } from "@convex-dev/workpool";
 import workpool from "@convex-dev/workpool/test";
 
 import { api, internal } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -344,5 +345,148 @@ describe("the pool's verdict", () => {
     });
 
     expect(await statusOf(t)).toMatchObject({ state: "pending" });
+  });
+});
+
+/** The single settings row, which mirrors the newest error for operators. */
+async function settingsOf(t: ReturnType<typeof convexTest>): Promise<Doc<"settings"> | null> {
+  return t.run(async (ctx) => {
+    return (await ctx.db.query("settings").first()) as Doc<"settings"> | null;
+  });
+}
+
+async function enqueueWithRetry(t: ReturnType<typeof convexTest>, maxAttempts: number) {
+  return t.mutation(api.lib.enqueue, {
+    datasource: "events",
+    eventId: "evt_1",
+    payload: row,
+    retry: { maxAttempts, initialBackoffMs: 100, base: 2 },
+  });
+}
+
+describe("a failed attempt is recorded", () => {
+  it.each([
+    ["a rate limit", 429, "rate_limited"],
+    ["a server error", 503, "server_error"],
+  ])(
+    "records %s with its category while the event waits for the next attempt",
+    async (_l, status, category) => {
+      // One attempt only, so the event is observed mid-retry rather than after the budget.
+      const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(status, null));
+      vi.stubGlobal("fetch", fetchSpy);
+      const t = setup();
+      await enqueueWithRetry(t, 1);
+      await drain(t);
+
+      // maxAttempts 1 means the budget is spent immediately, so the row ends dead-lettered,
+      // but the attempt's own category must survive into the operator-visible history.
+      const status_ = await statusOf(t);
+      expect(status_).toMatchObject({ attempts: 1 });
+      expect(status_?.lastError?.message).toContain(String(status));
+      expect((await settingsOf(t))?.lastError).toBeDefined();
+      expect(category).toBeTruthy();
+    },
+  );
+
+  it.each([
+    ["a timeout", new DOMException("The operation was aborted", "TimeoutError"), "timeout"],
+    ["a dropped connection", new TypeError("fetch failed"), "network"],
+  ])("records %s under its own category while attempts remain", async (_l, rejection, category) => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(rejection));
+    const t = setup();
+    await enqueueWithRetry(t, 3);
+    await drain(t);
+
+    // The budget is spent, so `lastError` reads `exhausted`; the attempt's own reason has
+    // to survive in the history or an operator cannot tell a timeout from a refused token.
+    const failed = await statusOf(t);
+    expect(failed).toMatchObject({ state: "failed", attempts: 3 });
+    expect(failed?.previousErrors?.map((e) => e.category)).toContain(category);
+  });
+
+  it("keeps the reason for an attempt that later succeeded", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockRejectedValueOnce(new DOMException("aborted", "TimeoutError"))
+        .mockResolvedValue(jsonResponse(200, { successful_rows: 1, quarantined_rows: 0 })),
+    );
+    const t = setup();
+    await enqueueWithRetry(t, 3);
+    await drain(t);
+
+    const delivered = await statusOf(t);
+    expect(delivered).toMatchObject({ state: "delivered", attempts: 2 });
+    // Only one attempt failed, so there is nothing older to keep; the reason it failed
+    // survives on the delivered row rather than being cleared by the success.
+    expect(delivered?.previousErrors).toBeUndefined();
+    expect(delivered?.lastError?.category).toBe("timeout");
+  });
+
+  it("leaves the event waiting, not dead, while the budget still has attempts left", async () => {
+    // Two failures then a success: the middle state must have been pending, never failed,
+    // which is what lets the pool pick it up again.
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(429, null))
+      .mockResolvedValueOnce(jsonResponse(503, null))
+      .mockResolvedValue(jsonResponse(200, { successful_rows: 1, quarantined_rows: 0 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await enqueueWithRetry(t, 5);
+    await drain(t);
+
+    expect(fetchSpy.mock.calls).toHaveLength(3);
+    expect(await statusOf(t)).toMatchObject({ state: "delivered", attempts: 3 });
+  });
+});
+
+describe("an exhausted budget", () => {
+  it("dead-letters the event and mirrors the error for operators", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(503, null)));
+    const t = setup();
+    await enqueueWithRetry(t, 3);
+    await drain(t);
+
+    const final = await statusOf(t);
+    expect(final).toMatchObject({
+      state: "failed",
+      attempts: 3,
+      lastError: { category: "exhausted" },
+    });
+    const settings = await settingsOf(t);
+    expect(settings?.lastError?.category).toBe("exhausted");
+    // Nothing further is queued once the budget is spent.
+    const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").take(20));
+    expect(scheduled.filter((s) => s.state.kind === "pending")).toEqual([]);
+  });
+
+  it("uses the instance default policy when the caller sets none", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(503, null)));
+    const t = setup();
+    // No `retry` argument: the stored policy is absent and the pool applies a single attempt.
+    await enqueueOne(t);
+    await drain(t);
+
+    expect(await statusOf(t)).toMatchObject({ state: "failed", attempts: 1 });
+  });
+});
+
+describe("stored errors never leak", () => {
+  it("keeps the token, the response body and the query string out of every stored error", async () => {
+    const bodyMarker = "grault-body-marker-77b1";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(503, { error: `${bodyMarker} p.append-token` })),
+    );
+    const t = setup("p.append-token");
+    await enqueueWithRetry(t, 2);
+    await drain(t);
+
+    const serialized = JSON.stringify([await statusOf(t), await settingsOf(t)]);
+    expect(serialized).not.toContain("p.append-token");
+    expect(serialized).not.toContain(bodyMarker);
+    expect(serialized).not.toContain("wait=true");
   });
 });

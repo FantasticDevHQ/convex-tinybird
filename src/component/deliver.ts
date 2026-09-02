@@ -88,13 +88,21 @@ async function attemptDelivery(
         signal: AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS),
       });
     } catch (error) {
-      // Timeout, connection loss or a refused redirect. The retry layer owns the policy,
-      // so fail the attempt rather than deciding here.
+      // Timeout, connection loss or a refused redirect: all worth another attempt.
       //
       // Only the error's NAME reaches the message: a fetch failure can carry the request
       // URL, and this string is persisted on the row and surfaced by `health`. The original
       // is attached as `cause`, which stays in the deployment log rather than a public API.
-      throw new Error(sanitizeMessage(`Tinybird request failed: ${(error as Error).name}`, token), {
+      const name = (error as Error).name;
+      await ctx.runMutation(internal.lib.markAttemptFailed, {
+        eventId,
+        error: {
+          category: transportCategory(name),
+          message: sanitizeMessage(`Tinybird request failed: ${name}`, token),
+          at: Date.now(),
+        },
+      });
+      throw new Error(sanitizeMessage(`Tinybird request failed: ${name}`, token), {
         cause: error,
       });
     }
@@ -117,9 +125,27 @@ async function attemptDelivery(
       });
       return { outcome: "failed" as const };
     }
-    // Not decided at this layer; failing the attempt hands it to the retry policy.
+    // Retryable: record the attempt, then fail it so the pool applies the retry policy.
+    // Running out of attempts is what turns this into a dead letter, in onDeliveryComplete.
+    await ctx.runMutation(internal.lib.markAttemptFailed, {
+      eventId,
+      error: {
+        category: classified.category,
+        httpStatus: classified.httpStatus,
+        message: sanitizeMessage(classified.message, token),
+        at: Date.now(),
+      },
+    });
     throw new Error(sanitizeMessage(classified.message, token));
   }
+}
+
+/**
+ * Why a request never produced a response. `AbortSignal.timeout` rejects with a
+ * `TimeoutError`; a refused redirect or a dropped connection surfaces as a `TypeError`.
+ */
+function transportCategory(errorName: string): "timeout" | "network" {
+  return errorName === "TimeoutError" || errorName === "AbortError" ? "timeout" : "network";
 }
 
 /** Reads a JSON body, returning null rather than throwing when there is not one. */

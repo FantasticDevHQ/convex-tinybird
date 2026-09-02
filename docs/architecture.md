@@ -61,6 +61,29 @@ Per-instance behaviour (payload bound, request timeout, retry policy) is configu
 Named instances are separate mounts (`app.use(tinybird, { name })`), each with its own tables, so
 instance isolation needs no code.
 
+## Retries and dead letters
+
+A response is one of three things: delivered, terminally failed, or worth another attempt.
+Terminal means the row will never be accepted as it stands (`400`, `404`, `413`, `422`, or rows
+Tinybird quarantined); those never retry. Everything else retries, including an accepted status
+whose row counts cannot be read, because that is the only reading that neither loses the event
+nor dead-letters one that actually arrived.
+
+Each failed attempt is recorded and the event returns to `pending`, so the next attempt can claim
+it. When the budget runs out the pool reports the failure and the event becomes a dead letter with
+category `exhausted`. Because `exhausted` says only that the attempts finished, each event keeps a
+bounded history of its earlier failures; that is where the actual reason lives.
+
+Defaults are eight attempts with exponential backoff from one second, roughly four minutes before
+an event dead-letters. A host can override them per instance on the client or per call at enqueue,
+and both are validated against the same bounds.
+
+**`Retry-After` is deliberately not implemented.** Tinybird sends it on `429`, and honouring it
+would mean scheduling the next attempt ourselves, which is exactly the ownership the nested pool
+holds. The pool's backoff is used instead. This is a real limitation: under a sustained rate limit
+the backoff may be shorter than the server asked for. Revisit it if rate limiting is observed in
+practice rather than in theory.
+
 ## Scheduling ownership
 
 - The nested `@convex-dev/workpool` owns delivery retries, backoff and attempt budgets. Nothing

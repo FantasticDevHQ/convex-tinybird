@@ -61,8 +61,7 @@ export const query: QueryBuilder<DataModel, "public"> = queryGeneric;
  * @param func - The query function. It receives a {@link QueryCtx} as its first argument.
  * @returns The wrapped query. Include this as an `export` to name it and make it accessible.
  */
-export const internalQuery: QueryBuilder<DataModel, "internal"> =
-  internalQueryGeneric;
+export const internalQuery: QueryBuilder<DataModel, "internal"> = internalQueryGeneric;
 
 /**
  * Define a mutation in this Convex app's public API.
@@ -82,8 +81,7 @@ export const mutation: MutationBuilder<DataModel, "public"> = mutationGeneric;
  * @param func - The mutation function. It receives a {@link MutationCtx} as its first argument.
  * @returns The wrapped mutation. Include this as an `export` to name it and make it accessible.
  */
-export const internalMutation: MutationBuilder<DataModel, "internal"> =
-  internalMutationGeneric;
+export const internalMutation: MutationBuilder<DataModel, "internal"> = internalMutationGeneric;
 
 /**
  * Define an action in this Convex app's public API.
@@ -104,8 +102,7 @@ export const action: ActionBuilder<DataModel, "public"> = actionGeneric;
  * @param func - The function. It receives an {@link ActionCtx} as its first argument.
  * @returns The wrapped function. Include this as an `export` to name it and make it accessible.
  */
-export const internalAction: ActionBuilder<DataModel, "internal"> =
-  internalActionGeneric;
+export const internalAction: ActionBuilder<DataModel, "internal"> = internalActionGeneric;
 
 /**
  * Define an HTTP action.
@@ -119,8 +116,7 @@ export const internalAction: ActionBuilder<DataModel, "internal"> =
  * @returns The wrapped function. Import this function from `convex/http.js` and route it to hook it up.
  */
 export const httpAction: HttpActionBuilder = httpActionGeneric;
-export const env: Env = (globalThis as unknown as { process: { env: Env } })
-  .process.env;
+export const env: Env = (globalThis as unknown as { process: { env: Env } }).process.env;
 
 /**
  * A set of services for use within Convex query functions.

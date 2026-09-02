@@ -12,10 +12,10 @@ export type ClassifiedResponse =
   /** Terminal: the row will never be accepted as-is, so do not retry it. */
   | { kind: "failed"; category: FailureCategory; httpStatus: number; message: string }
   /**
-   * Not decided here. The delivery action throws on this so the attempt fails and the
-   * retry layer owns the policy (FTD-2496 replaces this arm with a retryable outcome).
+   * Worth another attempt. The delivery action records it and throws, so the pool applies
+   * the event's retry policy; the budget running out is what turns it into a dead letter.
    */
-  | { kind: "unhandled"; httpStatus: number; message: string };
+  | { kind: "retryable"; category: FailureCategory; httpStatus: number; message: string };
 
 /** Statuses whose meaning is fixed regardless of the body. */
 const TERMINAL_STATUSES: ReadonlyMap<number, FailureCategory> = new Map([
@@ -26,6 +26,15 @@ const TERMINAL_STATUSES: ReadonlyMap<number, FailureCategory> = new Map([
 ]);
 
 const ACCEPTED_STATUSES = new Set([200, 202]);
+
+/** Statuses that mean "try again later" rather than "this row is wrong". */
+const RETRYABLE_STATUSES: ReadonlyMap<number, FailureCategory> = new Map([
+  [429, "rate_limited"],
+  [500, "server_error"],
+  [502, "server_error"],
+  [503, "server_error"],
+  [504, "server_error"],
+]);
 
 function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
@@ -55,8 +64,12 @@ export function classifyResponse(status: number, body: unknown): ClassifiedRespo
     const quarantined = parsed?.quarantined_rows;
     // Both counts must be readable before this response means anything.
     if (!isCount(successful) || !isCount(quarantined)) {
+      // Accepted, but we cannot tell whether the row landed. Retrying is the only option
+      // that neither loses the event nor dead-letters one that arrived; Tinybird
+      // deduplicates on event_id, so a re-send costs nothing.
       return {
-        kind: "unhandled",
+        kind: "retryable",
+        category: "server_error",
         httpStatus: status,
         message: `Tinybird returned HTTP ${status} without readable row counts`,
       };
@@ -70,8 +83,12 @@ export function classifyResponse(status: number, body: unknown): ClassifiedRespo
     };
   }
 
+  // Anything without a rule is read as an upstream problem rather than a bad row, so it
+  // retries and then dead-letters. That is the reading that cannot silently drop an event.
+  // Authorization failures are split out into a destination pause in a later layer.
   return {
-    kind: "unhandled",
+    kind: "retryable",
+    category: RETRYABLE_STATUSES.get(status) ?? "server_error",
     httpStatus: status,
     message: `Tinybird returned HTTP ${status}`,
   };

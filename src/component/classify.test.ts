@@ -57,23 +57,48 @@ describe("classifyResponse — terminal client errors", () => {
   });
 });
 
-describe("classifyResponse — deferred to the retry layer", () => {
-  it.each([401, 403, 429, 500, 502, 503, 504, 418])(
-    "leaves %i unhandled so the action fails and the retry layer decides",
-    (status) => {
-      expect(classifyResponse(status, null)).toMatchObject({
-        kind: "unhandled",
-        httpStatus: status,
-      });
-    },
-  );
+describe("classifyResponse — retryable", () => {
+  it("treats a rate limit as retryable so the budget absorbs a burst", () => {
+    expect(classifyResponse(429, null)).toMatchObject({
+      kind: "retryable",
+      category: "rate_limited",
+      httpStatus: 429,
+    });
+  });
 
-  it("leaves an accepted status with an unreadable body unhandled rather than guessing", () => {
+  it.each([500, 502, 503, 504])("treats %i as a retryable server error", (status) => {
+    expect(classifyResponse(status, null)).toMatchObject({
+      kind: "retryable",
+      category: "server_error",
+      httpStatus: status,
+    });
+  });
+
+  it("retries an accepted status with an unreadable body rather than guessing", () => {
     // Tinybird said 200 but we cannot tell whether the row landed or was quarantined.
     // Claiming delivered would silently lose an event; claiming quarantined would
     // dead-letter one that arrived. Re-sending is safe because Tinybird dedupes on event_id.
-    expect(classifyResponse(200, null)).toMatchObject({ kind: "unhandled", httpStatus: 200 });
-    expect(classifyResponse(200, { successful_rows: "1" })).toMatchObject({ kind: "unhandled" });
-    expect(classifyResponse(202, {})).toMatchObject({ kind: "unhandled" });
+    expect(classifyResponse(200, null)).toMatchObject({ kind: "retryable", httpStatus: 200 });
+    expect(classifyResponse(200, { successful_rows: "1" })).toMatchObject({ kind: "retryable" });
+    expect(classifyResponse(202, {})).toMatchObject({ kind: "retryable" });
+  });
+
+  it("retries a status it has no rule for, rather than silently dropping the event", () => {
+    // 401 and 403 become a destination pause in a later layer; until then the safe reading
+    // of an unknown status is "upstream problem", which retries and then dead-letters
+    // rather than discarding the row.
+    for (const status of [401, 403, 418]) {
+      expect(classifyResponse(status, null)).toMatchObject({
+        kind: "retryable",
+        httpStatus: status,
+      });
+    }
+  });
+
+  it("never quotes a response body in a retryable message either", () => {
+    const result = classifyResponse(503, { error: "upstream said p.token-leak" });
+    expect(result.kind).toBe("retryable");
+    if (result.kind !== "retryable") throw new Error("unreachable");
+    expect(result.message).not.toContain("p.token-leak");
   });
 });
