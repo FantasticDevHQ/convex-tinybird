@@ -8,8 +8,12 @@ import type { GenericDataModel, GenericMutationCtx, GenericQueryCtx } from "conv
 
 import type { ComponentApi } from "../component/_generated/component";
 import {
+  type EnqueueResult,
+  type EventIdentity,
+  type EventStatus,
   type Health,
   type ResolvedTinybirdDeliveryOptions,
+  type RetryConfig,
   type TinybirdDeliveryOptions,
   resolveTinybirdDeliveryOptions,
 } from "../component/contract";
@@ -26,6 +30,7 @@ export {
   REQUEST_TIMEOUT_RANGE_MS,
   RETRY_LIMITS,
   resolveTinybirdDeliveryOptions,
+  retryConfigViolation,
   vBoundedCount,
   vDeliveryError,
   vEnqueueArgs,
@@ -76,6 +81,29 @@ export class TinybirdDelivery {
     options: TinybirdDeliveryOptions = {},
   ) {
     this.options = resolveTinybirdDeliveryOptions(options);
+  }
+
+  /**
+   * Store an event for delivery, inside the caller's mutation so it commits or rolls back with
+   * the caller's own writes. `payload` is a JSON object sent verbatim as one Tinybird row.
+   * Throws `ConvexError` with a documented `code` before any write on invalid input.
+   */
+  async enqueue(
+    ctx: RunMutationCtx,
+    args: EventIdentity & { payload: unknown; retry?: Partial<RetryConfig> },
+  ): Promise<EnqueueResult> {
+    return ctx.runMutation(this.component.lib.enqueue, {
+      datasource: args.datasource,
+      eventId: args.eventId,
+      payload: args.payload,
+      maxPayloadBytes: this.options.maxPayloadBytes,
+      retry: args.retry ? { ...this.options.retry, ...args.retry } : this.options.retry,
+    });
+  }
+
+  /** Delivery state of one event, or `null` when unknown. Never includes the payload. */
+  async status(ctx: RunQueryCtx, identity: EventIdentity): Promise<EventStatus | null> {
+    return ctx.runQuery(this.component.lib.getStatus, identity);
   }
 
   /** Delivery health: configuration, pause state and bounded backlog counts. */

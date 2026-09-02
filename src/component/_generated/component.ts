@@ -21,24 +21,75 @@ import type { FunctionReference } from "convex/server";
  * }
  * ```
  */
-export type ComponentApi<Name extends string | undefined = string | undefined> =
-  {
-    lib: {
-      health: FunctionReference<
-        "query",
-        "internal",
-        {},
-        {
-          configured: boolean;
-          counts: {
-            delivering: { capped: boolean; count: number };
-            failed: { capped: boolean; count: number };
-            pending: { capped: boolean; count: number };
-          };
-          paused: boolean;
-          pausedReason?: "unauthorized" | "invalid_host" | "operator";
-        },
-        Name
-      >;
-    };
+export type ComponentApi<Name extends string | undefined = string | undefined> = {
+  lib: {
+    enqueue: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        datasource: string;
+        eventId: string;
+        maxPayloadBytes?: number;
+        payload: any;
+        retry?: {
+          base: number;
+          initialBackoffMs: number;
+          maxAttempts: number;
+        };
+      },
+      {
+        eventId: string;
+        outcome: "enqueued" | "duplicate";
+        state: "pending" | "delivering" | "delivered" | "failed";
+      },
+      Name
+    >;
+    getStatus: FunctionReference<
+      "query",
+      "internal",
+      { datasource: string; eventId: string },
+      {
+        attempts: number;
+        createdAt: number;
+        datasource: string;
+        deliveredAt?: number;
+        eventId: string;
+        lastError?: {
+          at: number;
+          category:
+            | "invalid_request"
+            | "quarantined"
+            | "not_found"
+            | "payload_too_large"
+            | "unauthorized"
+            | "rate_limited"
+            | "server_error"
+            | "timeout"
+            | "network"
+            | "exhausted"
+            | "stuck";
+          httpStatus?: number;
+          message: string;
+        };
+        state: "pending" | "delivering" | "delivered" | "failed";
+      } | null,
+      Name
+    >;
+    health: FunctionReference<
+      "query",
+      "internal",
+      {},
+      {
+        configured: boolean;
+        counts: {
+          delivering: { capped: boolean; count: number };
+          failed: { capped: boolean; count: number };
+          pending: { capped: boolean; count: number };
+        };
+        paused: boolean;
+        pausedReason?: "unauthorized" | "invalid_host" | "operator";
+      },
+      Name
+    >;
   };
+};

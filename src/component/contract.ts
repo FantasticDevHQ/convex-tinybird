@@ -120,6 +120,7 @@ export const vErrorCode = v.union(
   v.literal("invalid_payload"),
   v.literal("payload_too_large"),
   v.literal("identity_conflict"),
+  v.literal("invalid_retry"),
   v.literal("read_tokens_not_configured"),
 );
 export type ErrorCode = Infer<typeof vErrorCode>;
@@ -208,6 +209,18 @@ function assertRange(name: string, value: number, min: number, max: number): voi
   }
 }
 
+/** Returns the first out-of-range retry field, or null when the policy is acceptable. */
+export function retryConfigViolation(retry: RetryConfig): string | null {
+  for (const key of ["maxAttempts", "initialBackoffMs", "base"] as const) {
+    const { min, max } = RETRY_LIMITS[key];
+    const value = retry[key];
+    if (!Number.isFinite(value) || value < min || value > max) {
+      return `retry.${key} must be between ${min} and ${max}, got ${value}`;
+    }
+  }
+  return null;
+}
+
 const SUPPORTED_OPTIONS = new Set(["maxPayloadBytes", "requestTimeoutMs", "retry"]);
 const SUPPORTED_RETRY_OPTIONS = new Set(["maxAttempts", "initialBackoffMs", "base"]);
 
@@ -238,8 +251,7 @@ export function resolveTinybirdDeliveryOptions(
     REQUEST_TIMEOUT_RANGE_MS.max,
   );
   const retry: RetryConfig = { ...DEFAULT_RETRY, ...options.retry };
-  for (const key of ["maxAttempts", "initialBackoffMs", "base"] as const) {
-    assertRange(`retry.${key}`, retry[key], RETRY_LIMITS[key].min, RETRY_LIMITS[key].max);
-  }
+  const violation = retryConfigViolation(retry);
+  if (violation) throw new Error(`TinybirdDelivery: ${violation}`);
   return { maxPayloadBytes, requestTimeoutMs, retry };
 }
