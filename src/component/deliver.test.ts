@@ -1,4 +1,5 @@
 import { convexTest } from "convex-test";
+import type { WorkId } from "@convex-dev/workpool";
 import workpool from "@convex-dev/workpool/test";
 
 import { api, internal } from "./_generated/api";
@@ -188,10 +189,11 @@ describe("outcomes", () => {
     await enqueueOne(t);
     await drain(t);
 
-    expect(await statusOf(t)).toMatchObject({
-      state: "failed",
-      lastError: { category: "exhausted" },
-    });
+    const failed = await statusOf(t);
+    expect(failed).toMatchObject({ state: "failed", lastError: { category: "exhausted" } });
+    // `exhausted` alone cannot tell an operator whether the token was rejected or the
+    // service was down, so the status has to survive into the stored message.
+    expect(failed?.lastError?.message).toContain("503");
   });
 });
 
@@ -227,5 +229,120 @@ describe("terminal states are final", () => {
     });
 
     expect(await statusOf(t)).toMatchObject({ state: "delivered" });
+  });
+});
+
+describe("a retried attempt", () => {
+  it("re-claims the event on each attempt and dead-letters it once the budget is spent", async () => {
+    // The shipped client always sends a retry policy, so this is the ordinary path, not an
+    // exotic one. Without releasing the claim after a failed attempt the event would sit in
+    // `delivering` forever: the pool re-runs the action, the row is no longer `pending`, the
+    // claim is refused, the action reports success, and nothing ever dead-letters it.
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(503, null));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+
+    await t.mutation(api.lib.enqueue, {
+      datasource: "events",
+      eventId: "evt_1",
+      payload: row,
+      retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+    });
+    await drain(t);
+
+    expect(fetchSpy.mock.calls).toHaveLength(3);
+    expect(await statusOf(t)).toMatchObject({
+      state: "failed",
+      attempts: 3,
+      lastError: { category: "exhausted" },
+    });
+  });
+
+  it("stops retrying as soon as an attempt succeeds", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(503, null))
+      .mockResolvedValue(jsonResponse(200, { successful_rows: 1, quarantined_rows: 0 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+
+    await t.mutation(api.lib.enqueue, {
+      datasource: "events",
+      eventId: "evt_1",
+      payload: row,
+      retry: { maxAttempts: 5, initialBackoffMs: 100, base: 2 },
+    });
+    await drain(t);
+
+    expect(fetchSpy.mock.calls).toHaveLength(2);
+    expect(await statusOf(t)).toMatchObject({ state: "delivered", attempts: 2 });
+  });
+});
+
+describe("claiming an event", () => {
+  it("refuses a second claim, so two workers cannot send the same row twice", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+    await enqueueOne(t);
+    const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
+
+    expect(await t.mutation(internal.lib.markDelivering, { eventId })).toBe(true);
+    expect(await t.mutation(internal.lib.markDelivering, { eventId })).toBe(false);
+
+    // The refused claim must not have counted as an attempt.
+    expect(await statusOf(t)).toMatchObject({ state: "delivering", attempts: 1 });
+  });
+
+  it("refuses to claim an event that already finished", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(200, { successful_rows: 1, quarantined_rows: 0 })),
+    );
+    const t = setup();
+    await enqueueOne(t);
+    await drain(t);
+    const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
+
+    expect(await t.mutation(internal.lib.markDelivering, { eventId })).toBe(false);
+    expect(await statusOf(t)).toMatchObject({ state: "delivered", attempts: 1 });
+  });
+});
+
+describe("the pool's verdict", () => {
+  it("never dead-letters an event that was already delivered", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(200, { successful_rows: 1, quarantined_rows: 0 })),
+    );
+    const t = setup();
+    await enqueueOne(t);
+    await drain(t);
+    const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
+
+    // A late failure verdict for work whose action already confirmed the write.
+    await t.mutation(internal.lib.onDeliveryComplete, {
+      workId: "late-work-id" as WorkId,
+      context: { eventId },
+      result: { kind: "failed", error: "pool gave up" },
+    });
+
+    expect(await statusOf(t)).toMatchObject({ state: "delivered" });
+    expect((await statusOf(t))?.lastError).toBeUndefined();
+  });
+
+  it("returns a canceled event to the queue rather than losing it", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+    await enqueueOne(t);
+    const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
+    await t.mutation(internal.lib.markDelivering, { eventId });
+
+    await t.mutation(internal.lib.onDeliveryComplete, {
+      workId: "canceled-work-id" as WorkId,
+      context: { eventId },
+      result: { kind: "canceled" },
+    });
+
+    expect(await statusOf(t)).toMatchObject({ state: "pending" });
   });
 });

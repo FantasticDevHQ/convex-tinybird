@@ -3,7 +3,8 @@ import { v } from "convex/values";
 import { classifyResponse } from "./classify";
 import { eventsUrl, resolveHost } from "./destination";
 import { internal } from "./_generated/api";
-import { env, internalAction } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { type ActionCtx, env, internalAction } from "./_generated/server";
 import { DEFAULT_REQUEST_TIMEOUT_MS } from "./contract";
 import { sanitizeMessage } from "./sanitize";
 
@@ -18,6 +19,15 @@ import { sanitizeMessage } from "./sanitize";
  * The token is read here from the component's declared env rather than passed in from a
  * query, so it never crosses a function boundary or appears in a return value.
  */
+/**
+ * Result of one delivery attempt. Declared rather than inferred: the handler reaches back
+ * into `internal.*`, and inferring its type from that would make the generated API depend on
+ * the very function it describes.
+ */
+type DeliveryOutcome = {
+  outcome: "delivered" | "failed" | "deferred" | "skipped";
+};
+
 export const deliverEvent = internalAction({
   args: { eventId: v.id("events") },
   returns: v.object({
@@ -28,7 +38,7 @@ export const deliverEvent = internalAction({
       v.literal("skipped"),
     ),
   }),
-  handler: async (ctx, { eventId }) => {
+  handler: async (ctx, { eventId }): Promise<DeliveryOutcome> => {
     const loaded = await ctx.runQuery(internal.lib.loadForDelivery, { eventId });
     // The event was cleaned up, replayed elsewhere, or already finished.
     if (loaded === null || loaded.state === "delivered" || loaded.state === "failed") {
@@ -43,7 +53,26 @@ export const deliverEvent = internalAction({
     const claimed = await ctx.runMutation(internal.lib.markDelivering, { eventId });
     if (!claimed) return { outcome: "skipped" as const };
 
-    const url = eventsUrl(resolveHost(env.TINYBIRD_HOST), loaded.datasource);
+    try {
+      return await attemptDelivery(ctx, eventId, loaded.datasource, loaded.payload, token);
+    } catch (error) {
+      // The claim must not outlive the attempt: a retry has to be able to claim it again.
+      await ctx.runMutation(internal.lib.releaseForRetry, { eventId });
+      throw error;
+    }
+  },
+});
+
+/** One request and its consequence. Throws when the outcome is not decided at this layer. */
+async function attemptDelivery(
+  ctx: { runMutation: ActionCtx["runMutation"] },
+  eventId: Id<"events">,
+  datasource: string,
+  payload: string,
+  token: string,
+): Promise<DeliveryOutcome> {
+  {
+    const url = eventsUrl(resolveHost(env.TINYBIRD_HOST), datasource);
     let response: Response;
     try {
       response = await fetch(url, {
@@ -53,7 +82,7 @@ export const deliverEvent = internalAction({
           "content-type": "application/x-ndjson",
         },
         // One canonical row as a single NDJSON line.
-        body: `${loaded.payload}\n`,
+        body: `${payload}\n`,
         // A redirect could forward the Authorization header to another host.
         redirect: "error",
         signal: AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS),
@@ -90,8 +119,8 @@ export const deliverEvent = internalAction({
     }
     // Not decided at this layer; failing the attempt hands it to the retry policy.
     throw new Error(sanitizeMessage(classified.message, token));
-  },
-});
+  }
+}
 
 /** Reads a JSON body, returning null rather than throwing when there is not one. */
 async function readJson(response: Response): Promise<unknown> {

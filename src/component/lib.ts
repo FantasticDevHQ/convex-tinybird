@@ -236,6 +236,25 @@ export const markDelivering = internalMutation({
 });
 
 /**
+ * Return a claimed event to the queue after a failed attempt.
+ *
+ * Without this a retried attempt is dead on arrival: the pool re-runs the action, the row is
+ * still `delivering`, `markDelivering` refuses to claim it, the action reports "skipped", the
+ * pool records SUCCESS, and the event sits in `delivering` forever with no dead letter. The
+ * attempt count is kept, because it is a count of attempts and not of claims.
+ */
+export const releaseForRetry = internalMutation({
+  args: { eventId: v.id("events") },
+  returns: v.null(),
+  handler: async (ctx, { eventId }) => {
+    const event = await ctx.db.get(eventId);
+    if (event === null || event.state !== "delivering") return null;
+    await ctx.db.patch(eventId, { state: "pending", updatedAt: Date.now() });
+    return null;
+  },
+});
+
+/**
  * Record a confirmed write. Only an in-flight event can be delivered: a late acknowledgement
  * for an event that already failed must not resurrect it.
  */
