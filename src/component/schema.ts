@@ -33,6 +33,10 @@ export const events = defineTable({
 })
   .index("by_identity", ["datasource", "eventId"])
   .index("by_state_createdAt", ["state", "createdAt"])
+  // Exactly the set `resume` puts back to work: waiting, with no live pool item. Scanning
+  // `by_state_createdAt` and filtering instead would let rows that already have work fill
+  // the window and hide events behind them that genuinely need requeueing.
+  .index("by_state_workId_createdAt", ["state", "workId", "createdAt"])
   .index("by_state_updatedAt", ["state", "updatedAt"]);
 
 /** Single row, created lazily. Destination-wide state; never a credential. */

@@ -21,8 +21,6 @@ import {
   type BoundedCount,
   COUNT_CAP,
   DEFAULT_RESUME_LIMIT,
-  RESUME_SCAN_CAP,
-  RESUME_SCAN_FACTOR,
   MAX_ERROR_HISTORY,
   DATASOURCE_NAME_PATTERN,
   DEFAULT_MAX_PAYLOAD_BYTES,
@@ -471,21 +469,24 @@ export const resume = mutation({
       lastOperatorAction: { kind: "resume" as const, actor, at: Date.now() },
     });
 
-    // Only events the pool is NOT already working on. A row can be `pending` because it is
-    // waiting for an operator, or because an attempt failed and the pool is about to try
-    // again; queueing a second work item for the latter gives the event two independent
+    // Exactly the events the pool is NOT already working on. A row can be `pending` because
+    // it is waiting for an operator, or because an attempt failed and the pool is about to
+    // try again; queueing a second work item for the latter gives the event two independent
     // retry budgets and lets it be sent more times than its policy allows.
     //
-    // The scan is bounded separately from the batch so that rows with live work, which need
-    // no resuming, cannot fill the window and hide the ones that do.
-    const scanned = await ctx.db
+    // This is an index lookup rather than a scan-and-filter on purpose. Filtering a window
+    // of `pending` rows means rows that already have work occupy the window and hide the
+    // ones behind them, so the loop above reports "nothing left" while events still wait.
+    // That is not hypothetical: with a backlog larger than the window it happens on every
+    // drain where the host loops faster than the pool empties, which is the normal case.
+    const waiting = await ctx.db
       .query("events")
-      .withIndex("by_state_createdAt", (q) => q.eq("state", "pending"))
-      .take(Math.min(batch * RESUME_SCAN_FACTOR, RESUME_SCAN_CAP));
+      .withIndex("by_state_workId_createdAt", (q) =>
+        q.eq("state", "pending").eq("workId", undefined),
+      )
+      .take(batch);
     let requeued = 0;
-    for (const event of scanned) {
-      if (requeued >= batch) break;
-      if (event.workId !== undefined) continue;
+    for (const event of waiting) {
       await scheduleDelivery(ctx, event._id);
       requeued += 1;
     }

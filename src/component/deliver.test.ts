@@ -790,3 +790,52 @@ describe("marking a pause", () => {
     expect((await t.query(api.lib.health, {})).paused).toBe(true);
   });
 });
+
+describe("resume against a large backlog", () => {
+  it("drains every waiting event, not just the ones near the front", async () => {
+    // The failure this guards against: an implementation that scans a window of pending
+    // rows and filters out the ones with live work reports "nothing left" once the window
+    // fills with rows it just scheduled, leaving the events behind them waiting forever.
+    // A host loops in milliseconds while the pool needs a network round trip per event, so
+    // the window does fill. A post-outage backlog is exactly this shape.
+    const waiting = 550;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(200, { successful_rows: 1, quarantined_rows: 0 })),
+    );
+    const t = setup();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < waiting; i += 1) {
+        await ctx.db.insert("events", {
+          datasource: "events",
+          eventId: `backlog_${i}`,
+          payload: '{"backlog":1}',
+          payloadBytes: 14,
+          state: "pending" as const,
+          attempts: 0,
+          createdAt: Date.now() + i,
+          updatedAt: Date.now() + i,
+        });
+      }
+    });
+
+    // The documented loop, with no pool progress in between.
+    let total = 0;
+    for (let call = 0; call < 20; call += 1) {
+      const { requeued } = await t.mutation(api.lib.resume, { limit: DEFAULT_RESUME_LIMIT });
+      total += requeued;
+      if (requeued === 0) break;
+    }
+
+    expect(total).toBe(waiting);
+    const stillWaiting = await t.run(async (ctx) =>
+      ctx.db
+        .query("events")
+        .withIndex("by_state_workId_createdAt", (q) =>
+          q.eq("state", "pending").eq("workId", undefined),
+        )
+        .take(10),
+    );
+    expect(stillWaiting).toEqual([]);
+  });
+});

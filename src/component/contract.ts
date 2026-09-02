@@ -26,17 +26,6 @@ export const DATASOURCE_NAME_PATTERN = /^[A-Za-z0-9_]{1,128}$/;
 /** How many waiting events one `resume` call puts back to work. */
 export const DEFAULT_RESUME_LIMIT = 100;
 
-/**
- * How far past the batch `resume` looks for events that actually need requeueing.
- *
- * Rows the pool is already working on are skipped, and without a wider scan a window full
- * of them would report nothing to do while events behind them still waited.
- */
-export const RESUME_SCAN_FACTOR = 5;
-
-/** Absolute cap on rows one `resume` reads, so the mutation stays inside Convex's limits. */
-export const RESUME_SCAN_CAP = 500;
-
 /** How many earlier failures an event keeps alongside its newest one. */
 export const MAX_ERROR_HISTORY = 5;
 
