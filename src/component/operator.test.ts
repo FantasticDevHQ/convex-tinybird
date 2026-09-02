@@ -10,7 +10,7 @@ import {
   setup,
   statusOf,
   type TestInstance,
-} from "./test-fixtures";
+} from "../testing/fixtures";
 
 installComponentTestHooks();
 

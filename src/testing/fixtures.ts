@@ -4,9 +4,9 @@ import { convexTest } from "convex-test";
 import { ConvexError } from "convex/values";
 import workpool from "@convex-dev/workpool/test";
 
-import { api } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
-import schema from "./schema";
+import { api } from "../component/_generated/api";
+import type { Doc } from "../component/_generated/dataModel";
+import schema from "../component/schema";
 
 /**
  * Shared setup for the component's behavioural suites.
@@ -15,7 +15,11 @@ import schema from "./schema";
  * operator controls are tested separately but drive the same component, and duplicating the
  * harness between them is how two suites quietly stop testing the same thing.
  */
-const modules = import.meta.glob("./**/*.ts");
+// Globbed from outside the component directory on purpose. Convex bundles everything
+// under `src/component` and cannot analyse `import.meta`, so a shared harness living there
+// breaks the push for every host that mounts the component; only `.test.ts` files are
+// excluded from that bundle.
+const modules = import.meta.glob("../component/**/*.ts");
 
 /**
  * The component under test, typed against its own schema so `t.run` sees the real tables
