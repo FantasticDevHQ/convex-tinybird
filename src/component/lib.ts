@@ -1,6 +1,8 @@
 import { vOnCompleteArgs } from "@convex-dev/workpool";
 import { ConvexError, type Infer, v } from "convex/values";
 
+import type { vOperatorAction } from "./contract";
+
 import { canonicalJson, utf8Length } from "./canonical";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -18,6 +20,7 @@ import { sanitizeMessage } from "./sanitize";
 import {
   type BoundedCount,
   COUNT_CAP,
+  DEFAULT_RESUME_LIMIT,
   MAX_ERROR_HISTORY,
   DATASOURCE_NAME_PATTERN,
   DEFAULT_MAX_PAYLOAD_BYTES,
@@ -30,6 +33,7 @@ import {
   vEnqueueResult,
   vEventIdentity,
   vEventState,
+  vPausedReason,
   vEventStatus,
   vHealth,
 } from "./contract";
@@ -369,7 +373,14 @@ export const onDeliveryComplete = internalMutation({
 /** Creates the single settings row on first write. */
 async function patchSettings(
   ctx: MutationCtx,
-  patch: { lastDeliveredAt?: number; lastError?: Infer<typeof vDeliveryError> },
+  patch: {
+    lastDeliveredAt?: number;
+    lastError?: Infer<typeof vDeliveryError>;
+    paused?: boolean;
+    pausedReason?: Infer<typeof vPausedReason>;
+    pausedAt?: number;
+    lastOperatorAction?: Infer<typeof vOperatorAction>;
+  },
 ): Promise<void> {
   const settings = await ctx.db.query("settings").first();
   if (settings === null) {
@@ -378,3 +389,90 @@ async function patchSettings(
   }
   await ctx.db.patch(settings._id, patch);
 }
+
+// ---------------------------------------------------------------------------- operators
+
+/**
+ * Stop delivering and keep the event.
+ *
+ * Called by the delivery action when the destination refuses the credential. The event goes
+ * back to `pending` rather than to a dead letter, because nothing is wrong with the row.
+ */
+export const markPaused = internalMutation({
+  args: { eventId: v.id("events"), reason: vPausedReason, error: vDeliveryError },
+  returns: v.null(),
+  handler: async (ctx, { eventId, reason, error }) => {
+    const event = await ctx.db.get(eventId);
+    if (event !== null && event.state === "delivering") {
+      await ctx.db.patch(eventId, {
+        state: "pending",
+        lastError: error,
+        previousErrors: pushHistory(event.previousErrors, event.lastError),
+        updatedAt: Date.now(),
+      });
+    }
+    await patchSettings(ctx, {
+      paused: true,
+      pausedReason: reason,
+      pausedAt: Date.now(),
+      lastError: error,
+    });
+    return null;
+  },
+});
+
+/**
+ * Stop delivering on purpose. `actor` is whatever opaque identifier the host uses for the
+ * caller; the component never authenticates, so a host must authorize this itself.
+ */
+export const pause = mutation({
+  args: { reason: v.optional(vPausedReason), actor: v.optional(v.string()) },
+  returns: v.object({ paused: v.boolean() }),
+  handler: async (ctx, { reason, actor }) => {
+    await patchSettings(ctx, {
+      paused: true,
+      pausedReason: reason ?? "operator",
+      pausedAt: Date.now(),
+      lastOperatorAction: { kind: "pause" as const, actor, at: Date.now() },
+    });
+    return { paused: true };
+  },
+});
+
+/**
+ * Clear the pause and put waiting events back to work, a bounded batch at a time.
+ *
+ * Bounded because a paused destination can accumulate an arbitrary backlog, and one
+ * mutation that tried to re-enqueue all of it would exceed Convex's transaction limits.
+ * Hosts call this in a loop until `requeued` is zero.
+ */
+export const resume = mutation({
+  args: { actor: v.optional(v.string()), limit: v.optional(v.number()) },
+  returns: v.object({ paused: v.boolean(), requeued: v.number() }),
+  handler: async (ctx, { actor, limit }) => {
+    const settings = await ctx.db.query("settings").first();
+    const batch = Math.max(1, Math.min(limit ?? DEFAULT_RESUME_LIMIT, DEFAULT_RESUME_LIMIT));
+    if (settings !== undefined && settings !== null && settings.paused) {
+      await ctx.db.patch(settings._id, {
+        paused: false,
+        pausedReason: undefined,
+        pausedAt: undefined,
+      });
+    }
+    await patchSettings(ctx, {
+      lastOperatorAction: { kind: "resume" as const, actor, at: Date.now() },
+    });
+
+    // Only events with no live work: anything already queued would be delivered twice.
+    const waiting = await ctx.db
+      .query("events")
+      .withIndex("by_state_createdAt", (q) => q.eq("state", "pending"))
+      .take(batch);
+    let requeued = 0;
+    for (const event of waiting) {
+      await scheduleDelivery(ctx, event._id);
+      requeued += 1;
+    }
+    return { paused: false, requeued };
+  },
+});

@@ -12,11 +12,10 @@ This package is being built in layers, and this README describes only what is ac
 
 - **Implemented:** component mount and declared configuration, the `events`/`settings` schema, the
   public contract types and validators, transactional `enqueue` with canonical payload identity,
-  `getStatus`, the `health` query, delivery of one event per request to the Events API, and
-  retrying a transient failure until the budget is spent.
-- **Not implemented yet:** pausing a destination whose credentials are refused, operator replay,
-  and retention cleanup. A refused token currently retries and then dead-letters rather than
-  pausing the destination.
+  `getStatus`, the `health` query, delivery of one event per request to the Events API, retrying
+  a transient failure until the budget is spent, and pausing the destination when Tinybird
+  refuses the credential, with `pause` and `resume` for operators.
+- **Not implemented yet:** operator replay of dead letters and retention cleanup.
 
 With no `TINYBIRD_TOKEN` the component is inert by design: enqueue still stores events, nothing
 is scheduled, and no request leaves the deployment.
@@ -52,3 +51,24 @@ export const createOrder = mutation({
 Identity is `(datasource, eventId)`. Re-enqueueing the same identity with an equivalent payload
 (any key order) returns `outcome: "duplicate"`; a different payload throws `ConvexError` with
 `code: "identity_conflict"`. Payloads must be JSON objects under 64 KiB (configurable up to 512 KiB).
+
+## Pausing and resuming
+
+A `401` or `403` means the token is wrong, and no number of retries fixes that. Instead of
+spending an event's retry budget the component pauses the destination: the event stays `pending`,
+nothing further is sent, and `health` reports `paused: true` with the reason. Events enqueued
+while paused are stored and left alone.
+
+Once the token is fixed, `resume` clears the pause and puts waiting events back to work a bounded
+batch at a time, because a paused destination can accumulate an arbitrary backlog and one
+transaction cannot re-enqueue all of it. Call it until it reports nothing left:
+
+```ts
+let requeued = 0;
+do {
+  ({ requeued } = await tinybird.resume(ctx, { actor: userId }));
+} while (requeued > 0);
+```
+
+`pause` and `resume` record who acted. The component authenticates nobody, so wrap them in host
+mutations that authorize the caller.

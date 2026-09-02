@@ -23,6 +23,9 @@ export const HARD_MAX_PAYLOAD_BYTES = 524_288;
 export const MAX_EVENT_ID_LENGTH = 256;
 /** Tinybird datasource names: letters, digits and underscores only. */
 export const DATASOURCE_NAME_PATTERN = /^[A-Za-z0-9_]{1,128}$/;
+/** How many waiting events one `resume` call puts back to work. */
+export const DEFAULT_RESUME_LIMIT = 100;
+
 /** How many earlier failures an event keeps alongside its newest one. */
 export const MAX_ERROR_HISTORY = 5;
 

@@ -25,7 +25,7 @@ import { sanitizeMessage } from "./sanitize";
  * the very function it describes.
  */
 type DeliveryOutcome = {
-  outcome: "delivered" | "failed" | "deferred" | "skipped";
+  outcome: "delivered" | "failed" | "deferred" | "skipped" | "paused";
 };
 
 export const deliverEvent = internalAction({
@@ -36,6 +36,7 @@ export const deliverEvent = internalAction({
       v.literal("failed"),
       v.literal("deferred"),
       v.literal("skipped"),
+      v.literal("paused"),
     ),
   }),
   handler: async (ctx, { eventId }): Promise<DeliveryOutcome> => {
@@ -125,6 +126,24 @@ async function attemptDelivery(
       });
       return { outcome: "failed" as const };
     }
+    // A refused token is not worth retrying: no number of attempts fixes a wrong
+    // credential, and spending the budget would dead-letter the whole backlog one event at
+    // a time. Pause the destination, keep the event, and return without throwing so the
+    // pool records success and schedules nothing further.
+    if (classified.category === "unauthorized") {
+      await ctx.runMutation(internal.lib.markPaused, {
+        eventId,
+        reason: "unauthorized",
+        error: {
+          category: classified.category,
+          httpStatus: classified.httpStatus,
+          message: sanitizeMessage(classified.message, token),
+          at: Date.now(),
+        },
+      });
+      return { outcome: "paused" as const };
+    }
+
     // Retryable: record the attempt, then fail it so the pool applies the retry policy.
     // Running out of attempts is what turns this into a dead letter, in onDeliveryComplete.
     await ctx.runMutation(internal.lib.markAttemptFailed, {

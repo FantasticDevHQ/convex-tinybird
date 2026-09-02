@@ -109,5 +109,22 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         Name
       >;
+      pause: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actor?: string;
+          reason?: "unauthorized" | "invalid_host" | "operator";
+        },
+        { paused: boolean },
+        Name
+      >;
+      resume: FunctionReference<
+        "mutation",
+        "internal",
+        { actor?: string; limit?: number },
+        { paused: boolean; requeued: number },
+        Name
+      >;
     };
   };

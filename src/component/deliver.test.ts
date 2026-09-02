@@ -369,7 +369,6 @@ describe("a failed attempt is recorded", () => {
   it.each([
     ["a rate limit", 429, "rate_limited"],
     ["a server error", 503, "server_error"],
-    ["a refused token", 401, "unauthorized"],
   ])(
     "records %s with its category while the event waits for the next attempt",
     async (_l, status, category) => {
@@ -549,5 +548,115 @@ describe("recording an attempt", () => {
     expect(after?.state).toBe(before?.state);
     expect(after?.attempts).toBe(before?.attempts);
     expect(after?.lastError?.message).not.toBe("late attempt report");
+  });
+});
+
+describe("a refused token pauses the destination", () => {
+  it.each([401, 403])("pauses on %i instead of spending the retry budget", async (status) => {
+    // Retrying a wrong token cannot help, and doing so would dead-letter the whole backlog
+    // one event at a time. Pausing keeps the events and stops the requests.
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(status, null));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await t.mutation(api.lib.enqueue, {
+      datasource: "events",
+      eventId: "evt_1",
+      payload: row,
+      retry: { maxAttempts: 5, initialBackoffMs: 100, base: 2 },
+    });
+    await drain(t);
+
+    // One request, not five: the budget is untouched.
+    expect(fetchSpy.mock.calls).toHaveLength(1);
+    expect(await statusOf(t)).toMatchObject({ state: "pending", attempts: 1 });
+    expect(await t.query(api.lib.health, {})).toMatchObject({
+      paused: true,
+      pausedReason: "unauthorized",
+    });
+    // The event itself records why, so the reason survives on the row and not only on the
+    // destination: `unauthorized`, never the server-error fallback.
+    expect(await statusOf(t)).toMatchObject({ lastError: { category: "unauthorized" } });
+  });
+
+  it("stores but does not send events enqueued while paused", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(401, null));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await enqueueOne(t);
+    await drain(t);
+    expect(fetchSpy.mock.calls).toHaveLength(1);
+
+    await t.mutation(api.lib.enqueue, { datasource: "events", eventId: "evt_2", payload: row });
+    await drain(t);
+
+    // Still one request in total: the second event was stored and left alone.
+    expect(fetchSpy.mock.calls).toHaveLength(1);
+    expect(
+      await t.query(api.lib.getStatus, { datasource: "events", eventId: "evt_2" }),
+    ).toMatchObject({ state: "pending", attempts: 0 });
+  });
+});
+
+describe("resume", () => {
+  it("clears the pause and drains the backlog in bounded batches", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(401, null))
+      .mockResolvedValue(jsonResponse(200, { successful_rows: 1, quarantined_rows: 0 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+
+    // One event trips the pause, then a backlog accumulates behind it.
+    await enqueueOne(t);
+    await drain(t);
+    for (let i = 2; i <= 6; i += 1) {
+      await t.mutation(api.lib.enqueue, {
+        datasource: "events",
+        eventId: `evt_${i}`,
+        payload: { ...row, event_id: `evt_${i}` },
+      });
+    }
+    expect((await t.query(api.lib.health, {})).counts.pending.count).toBe(6);
+
+    const first = await t.mutation(api.lib.resume, { limit: 4, actor: "operator_1" });
+    await drain(t);
+    expect(first).toEqual({ paused: false, requeued: 4 });
+
+    const second = await t.mutation(api.lib.resume, { limit: 4, actor: "operator_1" });
+    await drain(t);
+    expect(second).toEqual({ paused: false, requeued: 2 });
+
+    const third = await t.mutation(api.lib.resume, { limit: 4, actor: "operator_1" });
+    expect(third).toEqual({ paused: false, requeued: 0 });
+
+    const health = await t.query(api.lib.health, {});
+    expect(health).toMatchObject({ paused: false });
+    expect(health.counts.pending.count).toBe(0);
+  });
+
+  it("records who paused and who resumed", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+
+    await t.mutation(api.lib.pause, { reason: "operator", actor: "operator_1" });
+    const paused = await settingsOf(t);
+    expect(paused).toMatchObject({
+      paused: true,
+      pausedReason: "operator",
+      lastOperatorAction: { kind: "pause", actor: "operator_1" },
+    });
+
+    await t.mutation(api.lib.resume, { actor: "operator_2" });
+    expect(await settingsOf(t)).toMatchObject({
+      paused: false,
+      lastOperatorAction: { kind: "resume", actor: "operator_2" },
+    });
+  });
+
+  it("is a no-op that reports honestly when nothing is paused or waiting", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup();
+
+    expect(await t.mutation(api.lib.resume, {})).toEqual({ paused: false, requeued: 0 });
   });
 });

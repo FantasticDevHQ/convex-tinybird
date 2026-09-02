@@ -12,6 +12,7 @@ import {
   type EventIdentity,
   type EventStatus,
   type Health,
+  type PausedReason,
   type ResolvedTinybirdDeliveryOptions,
   type RetryConfig,
   type TinybirdDeliveryOptions,
@@ -104,6 +105,28 @@ export class TinybirdDelivery {
   /** Delivery state of one event, or `null` when unknown. Never includes the payload. */
   async status(ctx: RunQueryCtx, identity: EventIdentity): Promise<EventStatus | null> {
     return ctx.runQuery(this.component.lib.getStatus, identity);
+  }
+
+  /**
+   * Stop delivering on purpose. The component does not authenticate anyone, so a host must
+   * authorize the caller itself; `actor` is whatever opaque identifier it wants recorded.
+   */
+  async pause(
+    ctx: RunMutationCtx,
+    args: { reason?: PausedReason; actor?: string } = {},
+  ): Promise<{ paused: boolean }> {
+    return ctx.runMutation(this.component.lib.pause, args);
+  }
+
+  /**
+   * Clear the pause and put waiting events back to work, a bounded batch at a time. A paused
+   * destination can accumulate an arbitrary backlog, so call this until `requeued` is zero.
+   */
+  async resume(
+    ctx: RunMutationCtx,
+    args: { actor?: string; limit?: number } = {},
+  ): Promise<{ paused: boolean; requeued: number }> {
+    return ctx.runMutation(this.component.lib.resume, args);
   }
 
   /** Delivery health: configuration, pause state and bounded backlog counts. */
