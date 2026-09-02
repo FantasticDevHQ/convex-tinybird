@@ -11,12 +11,13 @@ on the host's schema or auth.
 This package is being built in layers, and this README describes only what is actually present.
 
 - **Implemented:** component mount and declared configuration, the `events`/`settings` schema, the
-  public contract types and validators, and the `health` query.
-- **Not implemented yet:** enqueue, delivery to the Events API, retries, pausing, replay and
-  retention. Calling anything beyond `health` will not compile.
+  public contract types and validators, transactional `enqueue` with canonical payload identity,
+  `getStatus`, and the `health` query.
+- **Not implemented yet:** delivery to the Events API, retries, pausing, replay and retention.
+  Nothing is sent to Tinybird yet; enqueued events accumulate as `pending`.
 
-Until delivery exists the component is inert by design: with no `TINYBIRD_TOKEN` it schedules
-nothing and makes no outbound request.
+Until delivery exists the component is inert by design: it schedules nothing and makes no
+outbound request, and with no `TINYBIRD_TOKEN` it reports itself unconfigured.
 
 Design and conventions: [`docs/architecture.md`](./docs/architecture.md) — state machine, transaction
 boundaries, dedupe window, scheduling ownership. `node scripts/check-boundary.mjs` proves the package
