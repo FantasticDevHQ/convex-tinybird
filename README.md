@@ -12,12 +12,13 @@ This package is being built in layers, and this README describes only what is ac
 
 - **Implemented:** component mount and declared configuration, the `events`/`settings` schema, the
   public contract types and validators, transactional `enqueue` with canonical payload identity,
-  `getStatus`, and the `health` query.
-- **Not implemented yet:** delivery to the Events API, retries, pausing, replay and retention.
-  Nothing is sent to Tinybird yet; enqueued events accumulate as `pending`.
+  `getStatus`, the `health` query, and delivery of one event per request to the Events API.
+- **Not implemented yet:** retrying a transient failure, pausing a destination whose credentials
+  are refused, operator replay, and retention cleanup. A response this layer has no rule for
+  fails the event rather than being retried.
 
-Until delivery exists the component is inert by design: it schedules nothing and makes no
-outbound request, and with no `TINYBIRD_TOKEN` it reports itself unconfigured.
+With no `TINYBIRD_TOKEN` the component is inert by design: enqueue still stores events, nothing
+is scheduled, and no request leaves the deployment.
 
 Design and conventions: [`docs/architecture.md`](./docs/architecture.md) — state machine, transaction
 boundaries, dedupe window, scheduling ownership. `node scripts/check-boundary.mjs` proves the package
