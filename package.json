@@ -1,0 +1,31 @@
+{
+  "name": "@fantastic-dev/convex-tinybird",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Convex component that delivers analytics events to Tinybird: transactional enqueue, at-least-once delivery, dedupe by event identity.",
+  "exports": {
+    ".": "./src/client/index.ts",
+    "./convex.config": "./src/component/convex.config.ts",
+    "./convex.config.js": "./src/component/convex.config.ts",
+    "./test": "./src/test.ts",
+    "./_generated/component.js": {
+      "types": "./src/component/_generated/component.ts"
+    }
+  },
+  "scripts": {
+    "codegen": "convex codegen --component-dir src/component",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "convex": "^1.44.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.11",
+    "convex": "^1.44.0",
+    "convex-test": "^0.0.55",
+    "vite": "8.2.1",
+    "vitest": "^4.1.10"
+  }
+}
