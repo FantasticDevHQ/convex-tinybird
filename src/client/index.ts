@@ -12,6 +12,7 @@ import {
   type EventIdentity,
   type EventStatus,
   type Health,
+  type Heartbeat,
   type PausedReason,
   type ResolvedTinybirdDeliveryOptions,
   type RetryConfig,
@@ -42,6 +43,7 @@ export {
   vEventStatus,
   vFailureCategory,
   vHealth,
+  vHeartbeat,
   vOperatorAction,
   vPausedReason,
   vRetryConfig,
@@ -57,6 +59,7 @@ export type {
   EventStatus,
   FailureCategory,
   Health,
+  Heartbeat,
   OperatorAction,
   PausedReason,
   ResolvedTinybirdDeliveryOptions,
@@ -128,6 +131,15 @@ export class TinybirdDelivery {
     args: { actor?: string; limit?: number } = {},
   ): Promise<{ paused: boolean; requeued: number }> {
     return ctx.runMutation(this.component.lib.resume, args);
+  }
+
+  /**
+   * The cheap operator signals: configured, paused and why, how long the oldest event has
+   * waited, last delivery and newest failure. Two document reads whatever is queued, so this
+   * is what to alert on; `health` adds counts and costs more.
+   */
+  async heartbeat(ctx: RunQueryCtx): Promise<Heartbeat> {
+    return ctx.runQuery(this.component.lib.heartbeat, {});
   }
 
   /** Delivery health: configuration, pause state and bounded backlog counts. */

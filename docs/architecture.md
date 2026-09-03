@@ -84,6 +84,28 @@ holds. The pool's backoff is used instead. This is a real limitation: under a su
 the backoff may be shorter than the server asked for. Revisit it if rate limiting is observed in
 practice rather than in theory.
 
+## Health, and what "bounded" means
+
+`health` counts unfinished work per state through `by_state_createdAt`, stopping at `COUNT_CAP`,
+and reads one further row for the oldest waiting event. That bounds the number of **documents**.
+
+It does not bound the **bytes**. Convex returns whole documents, and an event row carries its
+payload, so a health call reads roughly `rows x payload size`. Against Convex's per-call read
+limit of about 8 MiB this is comfortable for small events and is not for large ones: at the
+component's default 64 KiB payload bound the limit is reached at around a hundred unfinished
+events, and the query then fails outright instead of reporting a large number.
+
+That is the opposite of what an operator needs from a health check, and it is a property of the
+schema rather than of the query: the payload lives on the row being counted. `heartbeat` exists
+for that reason: it returns the same fields minus the counts and reads exactly two documents, the
+settings row and the oldest waiting event, so the two signals worth alerting on stay reachable on
+precisely the day the counts fail. Advertising cheap signals that live inside the expensive query
+would have made the advice useless exactly when it was needed. Moving payloads into
+their own table, so `events` rows are small and countable, is the fix, and it belongs with the
+retention work that already changes payload lifecycle. Until then the cost is documented rather
+than claimed away, and `oldestPendingAgeMs` and `paused` are the two signals that cost one row
+each regardless of event size.
+
 ## Scheduling ownership
 
 - The nested `@convex-dev/workpool` owns delivery retries, backoff and attempt budgets. Nothing

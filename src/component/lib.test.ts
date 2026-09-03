@@ -18,6 +18,8 @@ describe("health", () => {
 
     const health = await t.query(api.lib.health, {});
 
+    // Strict equality on purpose: this is the whole operator-visible surface, so an extra
+    // field appearing here is something leaking into it.
     expect(health).toEqual({
       configured: false,
       paused: false,
@@ -26,6 +28,7 @@ describe("health", () => {
         delivering: { count: 0, capped: false },
         failed: { count: 0, capped: false },
       },
+      oldestPendingAgeMs: null,
     });
   });
 

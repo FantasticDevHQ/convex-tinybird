@@ -105,6 +105,67 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             failed: { capped: boolean; count: number };
             pending: { capped: boolean; count: number };
           };
+          lastDeliveredAt?: number;
+          lastError?: {
+            at: number;
+            category:
+              | "invalid_request"
+              | "quarantined"
+              | "not_found"
+              | "payload_too_large"
+              | "unauthorized"
+              | "rate_limited"
+              | "server_error"
+              | "timeout"
+              | "network"
+              | "exhausted"
+              | "stuck";
+            httpStatus?: number;
+            message: string;
+          };
+          lastOperatorAction?: {
+            actor?: string;
+            at: number;
+            count?: number;
+            kind: "pause" | "resume" | "replayFailed" | "replayEvent";
+          };
+          oldestPendingAgeMs: number | null;
+          paused: boolean;
+          pausedReason?: "unauthorized" | "invalid_host" | "operator";
+        },
+        Name
+      >;
+      heartbeat: FunctionReference<
+        "query",
+        "internal",
+        {},
+        {
+          configured: boolean;
+          lastDeliveredAt?: number;
+          lastError?: {
+            at: number;
+            category:
+              | "invalid_request"
+              | "quarantined"
+              | "not_found"
+              | "payload_too_large"
+              | "unauthorized"
+              | "rate_limited"
+              | "server_error"
+              | "timeout"
+              | "network"
+              | "exhausted"
+              | "stuck";
+            httpStatus?: number;
+            message: string;
+          };
+          lastOperatorAction?: {
+            actor?: string;
+            at: number;
+            count?: number;
+            kind: "pause" | "resume" | "replayFailed" | "replayEvent";
+          };
+          oldestPendingAgeMs: number | null;
           paused: boolean;
           pausedReason?: "unauthorized" | "invalid_host" | "operator";
         },

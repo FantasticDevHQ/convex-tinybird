@@ -190,16 +190,46 @@ export type BoundedCount = Infer<typeof vBoundedCount>;
  * Delivery health for operators: configuration and pause state plus bounded backlog
  * counts. Never carries a payload, host or token.
  */
+/**
+ * The signals that cost one row each, whatever an event weighs.
+ *
+ * Separate from {@link vHealth} on purpose: the counted scans in `health` read whole event
+ * rows, so on a backlog of large events that query can exceed Convex's read limit and fail.
+ * These are the two things an operator alerts on, and they have to stay reachable on exactly
+ * the day the counts do not.
+ */
+export const vHeartbeat = v.object({
+  configured: v.boolean(),
+  paused: v.boolean(),
+  pausedReason: v.optional(vPausedReason),
+  oldestPendingAgeMs: v.union(v.number(), v.null()),
+  lastDeliveredAt: v.optional(v.number()),
+  lastError: v.optional(vDeliveryError),
+  lastOperatorAction: v.optional(vOperatorAction),
+});
+export type Heartbeat = Infer<typeof vHeartbeat>;
+
 export const vHealth = v.object({
   /** Append token present and non-blank. */
   configured: v.boolean(),
   paused: v.boolean(),
   pausedReason: v.optional(vPausedReason),
+  /**
+   * Counts of work that is not finished. `delivered` is deliberately absent: it is bounded
+   * by retention rather than by this query, so counting it would make health cost grow with
+   * throughput, and it answers no operational question that `lastDeliveredAt` does not.
+   */
   counts: v.object({
     pending: vBoundedCount,
     delivering: vBoundedCount,
     failed: vBoundedCount,
   }),
+  /** How long the oldest waiting event has waited, or null when nothing is waiting. */
+  oldestPendingAgeMs: v.union(v.number(), v.null()),
+  lastDeliveredAt: v.optional(v.number()),
+  /** Newest failure, sanitized. Never a response body, a host or a token. */
+  lastError: v.optional(vDeliveryError),
+  lastOperatorAction: v.optional(vOperatorAction),
 });
 export type Health = Infer<typeof vHealth>;
 

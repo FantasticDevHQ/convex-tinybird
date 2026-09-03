@@ -57,6 +57,45 @@ Identity is `(datasource, eventId)`. Re-enqueueing the same identity with an equ
 (any key order) returns `outcome: "duplicate"`; a different payload throws `ConvexError` with
 `code: "identity_conflict"`. Payloads must be JSON objects under 64 KiB (configurable up to 512 KiB).
 
+## Monitoring
+
+`health` is the operator view. Each state is counted through an index and stops at a cap, so the
+query reads at most a thousand rows per state and never scans the table. A capped count reports
+`capped: true` rather than an exact number, because "more than a thousand waiting" is the answer
+an operator acts on.
+
+**Know the real cost before you rely on it.** The cap bounds _rows_, and Convex reads whole
+documents, so the bytes read are the row count multiplied by your event size. Convex allows about
+8 MiB per function call. With small events, a few hundred bytes each, the full cap is well inside
+that. With events near this component's default 64 KiB bound, the limit is reached at roughly a
+hundred unfinished events and `health` fails rather than reporting a large number, which is
+exactly when you need it.
+
+**So alert on `heartbeat`, not on `health`.** It returns everything below except the counts, and
+reads exactly two documents no matter how much is queued or how large your events are, which is
+what keeps it working on the day `health` cannot. Reach for `health` when you want the numbers and
+know your events are small.
+
+```ts
+const beat = await tinybird.heartbeat(ctx); // cheap, always available
+const health = await tinybird.health(ctx); // adds counts, costs more
+```
+
+What to alert on:
+
+- **`paused`**, in both — nothing is being delivered. `pausedReason` says whether the credential was
+  refused or the host is misconfigured, both of which need a person.
+- **`counts.failed.count > 0`**, `health` only — events Tinybird will not accept as they stand. They are kept,
+  and each one records why in `lastError` and its failure history.
+- **`oldestPendingAgeMs`**, in both, above whatever your latency budget is — a backlog that is growing shows
+  up in the counts, but a backlog that is _stuck_ shows up here and nowhere else.
+
+Delivered events are not counted. Retention bounds them rather than this query, and
+`lastDeliveredAt` answers "is anything getting through" without paying for the count.
+
+Neither query ever returns a payload, a host or a credential, and every error it surfaces is
+truncated and redacted.
+
 ## Pausing and resuming
 
 A `401` or `403` means the token is wrong, and no number of retries fixes that. Instead of

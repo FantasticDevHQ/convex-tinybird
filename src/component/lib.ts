@@ -37,6 +37,7 @@ import {
   vPausedReason,
   vEventStatus,
   vHealth,
+  vHeartbeat,
 } from "./contract";
 
 /** Reads at most `COUNT_CAP + 1` rows so health stays cheap on a large outbox. */
@@ -49,24 +50,54 @@ async function boundedCount(ctx: QueryCtx, state: EventState): Promise<BoundedCo
   return { count: capped ? COUNT_CAP : rows.length, capped };
 }
 
+/**
+ * The always-affordable signals: is it configured, is it paused and why, how long the oldest
+ * waiting event has waited, when something last got through, and the newest failure.
+ *
+ * Reads exactly two documents regardless of how much is queued or how large events are, so
+ * this is what an operator should alert on. `health` adds counts and costs more.
+ */
+async function readHeartbeat(ctx: QueryCtx): Promise<Infer<typeof vHeartbeat>> {
+  const [settings, oldestPending] = await Promise.all([
+    ctx.db.query("settings").first(),
+    ctx.db
+      .query("events")
+      .withIndex("by_state_createdAt", (q) => q.eq("state", "pending"))
+      .first(),
+  ]);
+  return {
+    configured: hasAppendToken(),
+    paused: settings?.paused ?? false,
+    pausedReason: settings?.pausedReason,
+    // The index is ordered by creation, so the first waiting row is the oldest. A backlog
+    // that is growing shows up in the counts; a backlog that is STUCK shows up here.
+    oldestPendingAgeMs: oldestPending === null ? null : Date.now() - oldestPending.createdAt,
+    lastDeliveredAt: settings?.lastDeliveredAt,
+    lastError: settings?.lastError,
+    lastOperatorAction: settings?.lastOperatorAction,
+  };
+}
+
+/** The cheap operator signals. See {@link readHeartbeat}. */
+export const heartbeat = query({
+  args: {},
+  returns: vHeartbeat,
+  handler: readHeartbeat,
+});
+
 /** Delivery health for operators: configuration, pause state and bounded backlog counts. */
 export const health = query({
   args: {},
   returns: vHealth,
   handler: async (ctx) => {
-    const settings = await ctx.db.query("settings").first();
-    // Three independent index range scans; there is no ordering between them.
-    const [pending, delivering, failed] = await Promise.all([
+    // Independent index range scans; there is no ordering between them.
+    const [heartbeatFields, pending, delivering, failed] = await Promise.all([
+      readHeartbeat(ctx),
       boundedCount(ctx, "pending"),
       boundedCount(ctx, "delivering"),
       boundedCount(ctx, "failed"),
     ]);
-    return {
-      configured: hasAppendToken(),
-      paused: settings?.paused ?? false,
-      pausedReason: settings?.pausedReason,
-      counts: { pending, delivering, failed },
-    };
+    return { ...heartbeatFields, counts: { pending, delivering, failed } };
   },
 });
 
@@ -411,6 +442,18 @@ async function patchSettings(
 // ---------------------------------------------------------------------------- operators
 
 /**
+ * Bound and redact the one host-supplied string this component stores and echoes back.
+ *
+ * `actor` is an opaque identifier the host chooses, so the component cannot validate it,
+ * but it is persisted on the settings row and returned by `health`. Unbounded it lets a
+ * careless caller grow both without limit, and a host that passed a credential as its actor
+ * would have it stored and handed back.
+ */
+function recordActor(actor: string | undefined): string | undefined {
+  return actor === undefined ? undefined : sanitizeMessage(actor, readAppendToken());
+}
+
+/**
  * Stop delivering and keep the event.
  *
  * Called by the delivery action when the destination refuses the credential. The event goes
@@ -451,7 +494,7 @@ export const pause = mutation({
       paused: true,
       pausedReason: reason ?? "operator",
       pausedAt: Date.now(),
-      lastOperatorAction: { kind: "pause" as const, actor, at: Date.now() },
+      lastOperatorAction: { kind: "pause" as const, actor: recordActor(actor), at: Date.now() },
     });
     return { paused: true };
   },
@@ -478,7 +521,7 @@ export const resume = mutation({
       });
     }
     await patchSettings(ctx, {
-      lastOperatorAction: { kind: "resume" as const, actor, at: Date.now() },
+      lastOperatorAction: { kind: "resume" as const, actor: recordActor(actor), at: Date.now() },
     });
 
     // Exactly the events the pool is NOT already working on. A row can be `pending` because
