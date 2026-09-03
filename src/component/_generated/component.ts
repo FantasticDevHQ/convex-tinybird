@@ -69,7 +69,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               | "timeout"
               | "network"
               | "exhausted"
-              | "stuck";
+              | "stuck"
+              | "payload_missing";
             httpStatus?: number;
             message: string;
           };
@@ -86,7 +87,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               | "timeout"
               | "network"
               | "exhausted"
-              | "stuck";
+              | "stuck"
+              | "payload_missing";
             httpStatus?: number;
             message: string;
           }>;
@@ -119,7 +121,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               | "timeout"
               | "network"
               | "exhausted"
-              | "stuck";
+              | "stuck"
+              | "payload_missing";
             httpStatus?: number;
             message: string;
           };
@@ -155,7 +158,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               | "timeout"
               | "network"
               | "exhausted"
-              | "stuck";
+              | "stuck"
+              | "payload_missing";
             httpStatus?: number;
             message: string;
           };

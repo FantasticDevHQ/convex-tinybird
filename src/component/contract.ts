@@ -126,6 +126,14 @@ export const vFailureCategory = v.union(
   v.literal("network"),
   v.literal("exhausted"),
   v.literal("stuck"),
+  /**
+   * The event exists but its payload row does not, so there is nothing to send.
+   *
+   * Distinct from `not_found`, which means Tinybird answered 404. This one never involves a
+   * request: it is a storage fault, and the only thing that can cause it is something having
+   * deleted one of the two rows without the other. Nothing in the component does that today.
+   */
+  v.literal("payload_missing"),
 );
 export type FailureCategory = Infer<typeof vFailureCategory>;
 

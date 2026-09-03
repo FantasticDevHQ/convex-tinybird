@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import {
   codeOf,
   drain,
@@ -175,11 +175,13 @@ describe("the payload lives outside the counted row", () => {
     expect(JSON.stringify(await settingsOf(t))).not.toContain(marker);
   });
 
-  it("refuses to send an event whose payload row is gone", async () => {
-    // The branch `architecture.md`'s migration note depends on, and nothing else reaches it:
-    // no code in this component deletes from either table, so only a hand-built fixture or a
-    // future retention sweep can produce a payload-less event. Deleting the guard leaves an
-    // event that POSTs an empty NDJSON line to Tinybird, which is worse than not sending.
+  it("dead-letters an event whose payload row is gone, rather than stranding it", async () => {
+    // Nothing in this component deletes from either table, so only a hand-built fixture or a
+    // future retention sweep can produce a payload-less event. Before FTD-2531 the delivery
+    // action read a missing payload as "the event is gone" — a benign race — so the row sat
+    // `pending` with `attempts: 0` and no error, unreachable by replay because replay takes
+    // only `failed` rows, and re-queued by resume into the same silent skip forever. The only
+    // moving signal was `oldestPendingAgeMs`, carrying no reason.
     const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, accepted));
     vi.stubGlobal("fetch", fetchSpy);
     const t = setup();
@@ -190,29 +192,55 @@ describe("the payload lives outside the counted row", () => {
     });
     await drain(t);
 
+    // Still nothing sent: an empty NDJSON line is worse than no request at all.
     expect(fetchSpy).not.toHaveBeenCalled();
 
-    // And the honest consequence, which the migration note now states rather than implying
-    // a `failed` state an operator could find: the event is STRANDED. It stays `pending`
-    // with no attempt and no recorded error, so replay cannot reach it — replay only takes
-    // `failed` — and resume re-queues it into the same silent skip. The only moving signal
-    // is `oldestPendingAgeMs`. Making that a dead letter needs a failure category the
-    // contract does not have, which is FTD-2531.
-    const stranded = await statusOf(t);
-    // `attempts: 0` is not decoration: it pins that a payload fault does not spend the retry
-    // budget. Claiming the row via `markDelivering` before loading the payload would make it
-    // 1, and verification confirmed that reordering reds exactly this line.
-    expect(stranded).toMatchObject({ state: "pending", attempts: 0 });
-    // Read off a non-null local rather than through an optional chain, which would pass
-    // vacuously if `statusOf` ever returned null.
-    expect(stranded?.lastError).toBeUndefined();
+    const dead = await statusOf(t);
+    expect(dead).toMatchObject({ state: "failed" });
+    expect(dead?.lastError?.category).toBe("payload_missing");
+    // A message an operator can act on, not just a category.
+    expect(dead?.lastError?.message).toMatch(/payload/iu);
 
-    // A FORWARD tripwire, not evidence about today. Nothing in this fixture can produce a
-    // `failed` row under any mutation of the current code, so this cannot fail for the
-    // reason the stranding story gives. It starts meaning something when FTD-2531 makes a
-    // payload-less event a dead letter — at which point this line should be inverted, not
-    // deleted.
-    expect((await t.query(api.lib.health, {})).counts.failed.count).toBe(0);
+    // The two things stranding denied an operator: it is counted, and it is reachable.
+    expect((await t.query(api.lib.health, {})).counts.failed.count).toBe(1);
+    // Reachable means replay actually selects it. It will fail again — the payload is still
+    // gone — but an operator who restores the row can now drain it, which is the whole
+    // difference between a dead letter and a stranded row.
+    expect(await t.mutation(api.lib.replayFailed, {})).toEqual({ replayed: 1, remaining: false });
+  });
+
+  it("still treats a missing EVENT row as the benign race it is", async () => {
+    // The other half of the distinction. A vanished event is a race — replayed elsewhere,
+    // already finished, cleaned up — and must record nothing. Collapsing the two cases back
+    // together would either strand payload faults again or dead-letter ordinary races.
+    // CONFIGURED, so the delivery action actually runs and reaches the null. An
+    // unconfigured instance never schedules, so nothing would exercise this path at all —
+    // the first version of this test used `setup("")` and stayed green when the missing-event
+    // branch was removed entirely.
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await enqueueOne(t);
+    const id = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
+    await t.run(async (ctx) => {
+      await ctx.db.delete(id);
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+    });
+    await drain(t);
+
+    expect(await t.run((ctx) => ctx.db.query("events").first())).toBeNull();
+    // Nothing sent and nothing recorded: no settings row, so no destination-wide lastError.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(await settingsOf(t)).toBeNull();
+
+    // Asserted on the action's own return, because with the row deleted there is no durable
+    // trace to read: a thrown action and a skipped one leave the same empty database, and
+    // `onDeliveryComplete` finds nothing to write against either. `skipped` is the whole
+    // observable difference between treating this as a race and dereferencing a null.
+    expect(await t.action(internal.deliver.deliverEvent, { eventId: id })).toEqual({
+      outcome: "skipped",
+    });
   });
 
   it("reads the payload only on the delivery path", () => {

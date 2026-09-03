@@ -42,11 +42,25 @@ export const deliverEvent = internalAction({
   }),
   handler: async (ctx, { eventId }): Promise<DeliveryOutcome> => {
     const loaded = await ctx.runQuery(internal.lib.loadForDelivery, { eventId });
-    // The event was cleaned up, replayed elsewhere, already finished, or its payload row is
-    // missing. The first three are races and benign; the fourth is a fault, and it is the
-    // one this cannot tell apart — see FTD-2531.
+    // The event was cleaned up, replayed elsewhere, or already finished. All races, all
+    // benign, and none of them records anything.
     if (loaded === null || loaded.state === "delivered" || loaded.state === "failed") {
       return { outcome: "skipped" as const };
+    }
+
+    // A missing payload is not a race. The event is real and will never be deliverable, so
+    // it becomes a dead letter an operator can find and replay rather than a `pending` row
+    // that nothing will ever pick up. Recorded before the claim, so it costs no attempt.
+    if (loaded.payload === undefined) {
+      await ctx.runMutation(internal.lib.markFailed, {
+        eventId,
+        error: {
+          category: "payload_missing" as const,
+          message: "The event has no stored payload, so there is nothing to send",
+          at: Date.now(),
+        },
+      });
+      return { outcome: "failed" as const };
     }
 
     const token = readAppendToken();

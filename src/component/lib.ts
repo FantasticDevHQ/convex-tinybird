@@ -190,7 +190,14 @@ export const loadForDelivery = internalQuery({
     v.null(),
     v.object({
       datasource: v.string(),
-      payload: v.string(),
+      /**
+       * Absent when the event exists but its payload row does not.
+       *
+       * Optional rather than a separate result shape because the compiler then forces the
+       * caller to handle it: the request body needs a `string`, so a missing payload cannot
+       * reach the wire by being forgotten.
+       */
+      payload: v.optional(v.string()),
       state: vEventState,
       paused: v.boolean(),
       requestTimeoutMs: v.optional(v.number()),
@@ -205,11 +212,13 @@ export const loadForDelivery = internalQuery({
       .query("payloads")
       .withIndex("by_event", (q) => q.eq("eventId", eventId))
       .unique();
-    if (stored === null) return null;
+    // A missing payload is NOT reported as a missing event. Collapsing the two was the
+    // defect: the caller reads a null as a benign race and skips, so the row sat `pending`
+    // with no attempt and no error, invisible to replay and re-queued by resume forever.
     const settings = await ctx.db.query("settings").first();
     return {
       datasource: event.datasource,
-      payload: stored.payload,
+      payload: stored?.payload,
       state: event.state,
       paused: settings?.paused ?? false,
       requestTimeoutMs: event.requestTimeoutMs,

@@ -66,6 +66,8 @@ instance isolation needs no code.
 
 ## Retries and dead letters
 
+One dead letter is not a delivery failure at all: `payload_missing` means the event has no stored payload, so no request was ever made and no attempt was spent. It is a storage fault rather than a destination fault, and it is the one category that cannot be resolved by retrying — only by restoring the row.
+
 A response is one of three things: delivered, terminally failed, or worth another attempt.
 Terminal means the row will never be accepted as it stands (`400`, `404`, `413`, `422`, or rows
 Tinybird quarantined); those never retry. Everything else retries, including an accepted status
@@ -178,15 +180,21 @@ the one field here that can carry customer data, never reaches an operator surfa
 
 **There is no migration for existing data, and that is a decision rather than an omission.** A
 deployment that already holds events written before this change has them with the payload on the
-`events` row, where nothing now reads it. Those events do not fail — they are **stranded**.
-`loadForDelivery` returns null when the payload row is missing, so the delivery action treats the
-event as gone: no request is made, no attempt is spent, and no error is recorded. The row stays
-`pending` with `attempts: 0` forever. Replay cannot reach it, because replay takes only `failed`
-rows, and `resume` re-queues it into the same silent skip. The only signal that moves is
-`oldestPendingAgeMs`, and it carries no reason.
+`events` row, where nothing now reads it. Those events become **dead letters** on their first
+delivery attempt, with `lastError.category` set to `payload_missing` and a message saying there is
+nothing to send. They are counted by `health` and reachable by `replayFailed`, so an operator can
+find them, and can drain them if the payload rows are restored.
 
-That is worse than a dead letter, and deliberately not fixed here: turning it into one needs a
-failure category the contract does not have. FTD-2531 carries it.
+That is FTD-2531's doing, and it replaced something worse. Until it landed, `loadForDelivery`
+reported a missing payload the same way it reported a missing event — as a null — so the delivery
+action read it as a benign race and skipped. The row stayed `pending` with `attempts: 0` and no
+recorded error: invisible to replay, which takes only `failed` rows, and re-queued by `resume`
+into the same silent skip forever. The only signal that moved was `oldestPendingAgeMs`, carrying
+no reason.
+
+The two nulls are now distinguished, and both halves matter. A missing EVENT genuinely is a race —
+cleaned up, replayed elsewhere, already finished — and still records nothing. A missing PAYLOAD
+never resolves on its own, so recording it is the only way an operator learns of it.
 
 The component is pre-release and unpublished — it has no external consumers and its only host is
 this repository, whose local deployment carries no events worth keeping. Writing and testing a
