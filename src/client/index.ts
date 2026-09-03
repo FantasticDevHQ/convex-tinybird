@@ -142,6 +142,35 @@ export class TinybirdDelivery {
     return ctx.runQuery(this.component.lib.heartbeat, {});
   }
 
+  /**
+   * Replay dead letters, a bounded batch at a time, least recently changed first — NOT
+   * oldest first, so an event that is replayed and fails again goes to the back of the
+   * queue rather than being picked again immediately. Identity and payload are preserved,
+   * so a replayed event is the same event.
+   *
+   * There is no category filter, on purpose: replaying is what advances the scan, so a
+   * filter that skipped rows would leave them parked at the front of the window and make
+   * everything behind them unreachable. Use {@link replayEvent} to replay one event.
+   *
+   * `remaining` means dead letters exist right now, not that there are ones you have not
+   * seen. If the cause was not really fixed, replayed events fail again and `remaining`
+   * stays true, so bound the loop rather than spinning on it.
+   */
+  async replayFailed(
+    ctx: RunMutationCtx,
+    args: { limit?: number; actor?: string } = {},
+  ): Promise<{ replayed: number; remaining: boolean }> {
+    return ctx.runMutation(this.component.lib.replayFailed, args);
+  }
+
+  /** Replay one dead letter by its identity. */
+  async replayEvent(
+    ctx: RunMutationCtx,
+    args: EventIdentity & { actor?: string },
+  ): Promise<{ replayed: boolean }> {
+    return ctx.runMutation(this.component.lib.replayEvent, args);
+  }
+
   /** Delivery health: configuration, pause state and bounded backlog counts. */
   async health(ctx: RunQueryCtx): Promise<Health> {
     return ctx.runQuery(this.component.lib.health, {});

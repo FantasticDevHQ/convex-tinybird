@@ -14,8 +14,10 @@ This package is being built in layers, and this README describes only what is ac
   public contract types and validators, transactional `enqueue` with canonical payload identity,
   `getStatus`, the `health` query, delivery of one event per request to the Events API, retrying
   a transient failure until the budget is spent, and pausing the destination when Tinybird
-  refuses the credential, with `pause` and `resume` for operators.
-- **Not implemented yet:** operator replay of dead letters and retention cleanup.
+  refuses the credential, with `pause` and `resume` for operators, and replay of dead letters
+  with an operator audit trail.
+- **Not implemented yet:** retention cleanup, requeueing events stuck in delivery, and
+  datasource-scoped operator controls.
 
 `TINYBIRD_HOST` is validated before any request: it must be a bare `https` origin with no path,
 query, fragment or embedded credentials, the one exception being a loopback address for Tinybird
@@ -120,5 +122,67 @@ would give it a second retry budget and let it be sent more times than its polic
 also what makes the loop above terminate: each call schedules what it picks up, so the next call
 finds nothing left to do.
 
-`pause` and `resume` record who acted. The component authenticates nobody, so wrap them in host
+## Replaying dead letters
+
+An event that Tinybird refused, or that ran out of attempts, is kept rather than dropped. Once the
+cause is fixed, replay puts it back in the queue:
+
+```ts
+// Bounded on purpose — see below. Ten passes at the default limit is 1000 events.
+for (let pass = 0; pass < 10; pass += 1) {
+  const { remaining } = await tinybird.replayFailed(ctx, { actor: userId });
+  if (!remaining) break;
+}
+
+await tinybird.replayEvent(ctx, { datasource: "orders", eventId, actor: userId });
+```
+
+**`remaining` means "there are dead letters right now", not "there are ones you have not seen
+yet".** If the cause is genuinely fixed the loop drains and stops. If it is not, replayed events
+fail again, return to `failed`, and `remaining` stays true — so an unbounded `while (remaining)`
+loop would hammer a broken destination forever. Bound the loop and check `health` before running
+it again.
+
+Replay walks the dead letters by when they last changed, not by when they were created, so an
+event that is replayed and fails again goes to the back of the queue. Every dead letter is tried
+once before any is tried twice. Without that, a still-broken destination means the oldest few
+events are replayed over and over while everything behind them is never reached at all.
+
+**The operator controls are mount-wide.** `enqueue` and `getStatus` take a datasource, but
+`pause`, `resume`, `health` and `replayFailed` do not, so a mount carrying more than one
+datasource cannot act on them independently — replaying to fix one datasource resends the
+other's dead letters too. Mount the component once per datasource.
+
+**The default batch is 20, and it is sized from bytes.** Convex returns whole documents and caps
+a call near 8 MiB, and an event row carries its payload. A batch of `n` costs `3n + 1` passes over
+a row: replay reads `n + 1`, scheduling re-reads `n` to confirm each is still pending, and the
+patch writes `n`. So budget `4 x (maxPayloadBytes + 2 KB)` per row — three passes plus margin,
+because the 2 KB of per-row overhead is an estimate and `previousErrors` grows with every replay
+cycle:
+
+| your `maxPayloadBytes` | recommended `limit`           |
+| ---------------------- | ----------------------------- |
+| 1 KiB                  | the ceiling of 30 binds first |
+| 64 KiB (the default)   | 30                            |
+| 512 KiB (the maximum)  | 3                             |
+
+The default of 20 uses 49% of the budget at the default bound, and the ceiling of 30 uses 73%.
+The ceiling protects a host that has not thought about bytes; it is not a promise for a host that
+raised `maxPayloadBytes`. If you did, pass your own `limit` from the table. Exceeding the real
+limit does not degrade: the call throws.
+
+**Replay is not re-enqueue.** The identity and the payload are the ones the host committed, so a
+later matching enqueue is still a duplicate and a mismatched one is still a conflict. The attempt
+count resets because the budget is being granted again; the failure history does not, because "why
+did this die" is the question you have after a replay.
+
+Replay takes the least recently changed dead letters first and has no category filter. Replaying is what moves the
+scan forward, so a filter would leave the rows it skipped parked at the front of the window and
+make every dead letter behind them unreachable while the call still reported that nothing remained.
+To replay a specific event, use `replayEvent`.
+
+Replaying while paused stores the events without sending them, which is usually what you want: fix
+the credential, then resume.
+
+`pause`, `resume` and both replays record who acted. The component authenticates nobody, so wrap them in host
 mutations that authorize the caller.

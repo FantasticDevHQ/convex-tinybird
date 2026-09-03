@@ -1,31 +1,27 @@
 import { vOnCompleteArgs } from "@convex-dev/workpool";
-import { ConvexError, type Infer, v } from "convex/values";
-
-import type { vOperatorAction } from "./contract";
+import { ConvexError, v } from "convex/values";
 
 import { canonicalJson, utf8Length } from "./canonical";
-import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import { readAppendToken } from "./credentials";
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import {
-  internalMutation,
-  internalQuery,
-  mutation,
-  type MutationCtx,
-  query,
-  type QueryCtx,
-} from "./_generated/server";
-import { hasAppendToken, readAppendToken } from "./credentials";
-import { pool } from "./pool";
+  boundedCount,
+  patchSettings,
+  pushHistory,
+  readHeartbeat,
+  recordActor,
+  requeueDeadLetter,
+  scheduleDelivery,
+} from "./state";
 import { sanitizeMessage } from "./sanitize";
 import {
-  type BoundedCount,
-  COUNT_CAP,
+  DEFAULT_REPLAY_LIMIT,
+  MAX_REPLAY_LIMIT,
+  boundedBatch,
   DEFAULT_RESUME_LIMIT,
   REQUEST_TIMEOUT_RANGE_MS,
-  MAX_ERROR_HISTORY,
   DATASOURCE_NAME_PATTERN,
   DEFAULT_MAX_PAYLOAD_BYTES,
-  type EventState,
   HARD_MAX_PAYLOAD_BYTES,
   MAX_EVENT_ID_LENGTH,
   retryConfigViolation,
@@ -39,44 +35,6 @@ import {
   vHealth,
   vHeartbeat,
 } from "./contract";
-
-/** Reads at most `COUNT_CAP + 1` rows so health stays cheap on a large outbox. */
-async function boundedCount(ctx: QueryCtx, state: EventState): Promise<BoundedCount> {
-  const rows = await ctx.db
-    .query("events")
-    .withIndex("by_state_createdAt", (q) => q.eq("state", state))
-    .take(COUNT_CAP + 1);
-  const capped = rows.length > COUNT_CAP;
-  return { count: capped ? COUNT_CAP : rows.length, capped };
-}
-
-/**
- * The always-affordable signals: is it configured, is it paused and why, how long the oldest
- * waiting event has waited, when something last got through, and the newest failure.
- *
- * Reads exactly two documents regardless of how much is queued or how large events are, so
- * this is what an operator should alert on. `health` adds counts and costs more.
- */
-async function readHeartbeat(ctx: QueryCtx): Promise<Infer<typeof vHeartbeat>> {
-  const [settings, oldestPending] = await Promise.all([
-    ctx.db.query("settings").first(),
-    ctx.db
-      .query("events")
-      .withIndex("by_state_createdAt", (q) => q.eq("state", "pending"))
-      .first(),
-  ]);
-  return {
-    configured: hasAppendToken(),
-    paused: settings?.paused ?? false,
-    pausedReason: settings?.pausedReason,
-    // The index is ordered by creation, so the first waiting row is the oldest. A backlog
-    // that is growing shows up in the counts; a backlog that is STUCK shows up here.
-    oldestPendingAgeMs: oldestPending === null ? null : Date.now() - oldestPending.createdAt,
-    lastDeliveredAt: settings?.lastDeliveredAt,
-    lastError: settings?.lastError,
-    lastOperatorAction: settings?.lastOperatorAction,
-  };
-}
 
 /** The cheap operator signals. See {@link readHeartbeat}. */
 export const heartbeat = query({
@@ -211,33 +169,6 @@ export const getStatus = query({
 
 // ---------------------------------------------------------------------------- delivery
 
-/**
- * Hand one event to the delivery pool, if there is anywhere to send it.
- *
- * Scheduling is skipped rather than deferred when the component is unconfigured or the
- * destination is paused: an event with no live work is exactly what `resume` looks for, so
- * queueing work that would immediately no-op only burns pool capacity.
- */
-async function scheduleDelivery(ctx: MutationCtx, id: Id<"events">): Promise<void> {
-  if (!hasAppendToken()) return;
-  const settings = await ctx.db.query("settings").first();
-  if (settings?.paused === true) return;
-  const event = await ctx.db.get(id);
-  if (event === null || event.state !== "pending") return;
-
-  const workId = await pool.enqueueAction(
-    ctx,
-    internal.deliver.deliverEvent,
-    { eventId: id },
-    {
-      retry: event.retry ?? false,
-      onComplete: internal.lib.onDeliveryComplete,
-      context: { eventId: id },
-    },
-  );
-  await ctx.db.patch(id, { workId });
-}
-
 /** What the delivery action needs to build a request. Never includes a credential. */
 export const loadForDelivery = internalQuery({
   args: { eventId: v.id("events") },
@@ -310,22 +241,6 @@ export const markAttemptFailed = internalMutation({
 });
 
 /**
- * Keep a bounded history of earlier failures.
- *
- * `lastError` alone cannot answer "why did this die": once the budget runs out it reads
- * `exhausted`, which says the attempts finished but not whether the destination was rate
- * limiting, timing out, or refusing the token. The cap keeps a permanently failing event
- * from growing its own row without bound.
- */
-function pushHistory(
-  history: Infer<typeof vDeliveryError>[] | undefined,
-  previous: Infer<typeof vDeliveryError> | undefined,
-): Infer<typeof vDeliveryError>[] | undefined {
-  if (previous === undefined) return history;
-  return [...(history ?? []), previous].slice(-MAX_ERROR_HISTORY);
-}
-
-/**
  * Return a claimed event to the queue after a failed attempt.
  *
  * Without this a retried attempt is dead on arrival: the pool re-runs the action, the row is
@@ -382,14 +297,27 @@ export const markFailed = internalMutation({
 export const onDeliveryComplete = internalMutation({
   args: vOnCompleteArgs(v.object({ eventId: v.id("events") })),
   returns: v.null(),
-  handler: async (ctx, { context, result }) => {
+  handler: async (ctx, { context, result, workId }) => {
     const eventId = context.eventId;
-    // The pool is done with this event either way, so the live-work marker goes now.
-    // `resume` reads it to tell "waiting for a worker" from "waiting for an operator".
+    // A completion speaks for the row only while the row still holds the item it is
+    // reporting on. `onComplete` runs in its own transaction after the action returned, so
+    // an operator who replays in that window gives the event a NEW work item, and this
+    // completion is then stale in two ways at once.
+    //
+    // The marker is the obvious one: clearing whatever is there erases the new item and
+    // leaves the row `pending` with no marker, which is precisely what `resume`'s index
+    // selects, so the event gets a second concurrent worker and two independent retry
+    // budgets. The verdict is the other, and it is worse — applying a `failed` result to a
+    // row that has since been replayed marks an in-flight event as dead on the strength of
+    // the attempt before it.
+    //
+    // Both are refused by the same check. Today the verdict half is unreachable, because a
+    // row the pool reports `failed` for is `pending` rather than `failed` and so cannot be
+    // replayed; that is an argument about the current state machine rather than an
+    // invariant, and this is what makes it one.
     const finished = await ctx.db.get(eventId);
-    if (finished !== null && finished.workId !== undefined) {
-      await ctx.db.patch(eventId, { workId: undefined });
-    }
+    if (finished === null || finished.workId !== workId) return null;
+    await ctx.db.patch(eventId, { workId: undefined });
     if (result.kind === "failed") {
       const event = await ctx.db.get(eventId);
       if (event === null || event.state === "delivered" || event.state === "failed") return null;
@@ -419,39 +347,7 @@ export const onDeliveryComplete = internalMutation({
   },
 });
 
-/** Creates the single settings row on first write. */
-async function patchSettings(
-  ctx: MutationCtx,
-  patch: {
-    lastDeliveredAt?: number;
-    lastError?: Infer<typeof vDeliveryError>;
-    paused?: boolean;
-    pausedReason?: Infer<typeof vPausedReason>;
-    pausedAt?: number;
-    lastOperatorAction?: Infer<typeof vOperatorAction>;
-  },
-): Promise<void> {
-  const settings = await ctx.db.query("settings").first();
-  if (settings === null) {
-    await ctx.db.insert("settings", { paused: false, ...patch });
-    return;
-  }
-  await ctx.db.patch(settings._id, patch);
-}
-
 // ---------------------------------------------------------------------------- operators
-
-/**
- * Bound and redact the one host-supplied string this component stores and echoes back.
- *
- * `actor` is an opaque identifier the host chooses, so the component cannot validate it,
- * but it is persisted on the settings row and returned by `health`. Unbounded it lets a
- * careless caller grow both without limit, and a host that passed a credential as its actor
- * would have it stored and handed back.
- */
-function recordActor(actor: string | undefined): string | undefined {
-  return actor === undefined ? undefined : sanitizeMessage(actor, readAppendToken());
-}
 
 /**
  * Stop delivering and keep the event.
@@ -512,7 +408,7 @@ export const resume = mutation({
   returns: v.object({ paused: v.boolean(), requeued: v.number() }),
   handler: async (ctx, { actor, limit }) => {
     const settings = await ctx.db.query("settings").first();
-    const batch = Math.max(1, Math.min(limit ?? DEFAULT_RESUME_LIMIT, DEFAULT_RESUME_LIMIT));
+    const batch = boundedBatch(limit, DEFAULT_RESUME_LIMIT, DEFAULT_RESUME_LIMIT);
     if (settings !== undefined && settings !== null && settings.paused) {
       await ctx.db.patch(settings._id, {
         paused: false,
@@ -520,10 +416,6 @@ export const resume = mutation({
         pausedAt: undefined,
       });
     }
-    await patchSettings(ctx, {
-      lastOperatorAction: { kind: "resume" as const, actor: recordActor(actor), at: Date.now() },
-    });
-
     // Exactly the events the pool is NOT already working on. A row can be `pending` because
     // it is waiting for an operator, or because an attempt failed and the pool is about to
     // try again; queueing a second work item for the latter gives the event two independent
@@ -540,11 +432,103 @@ export const resume = mutation({
         q.eq("state", "pending").eq("workId", undefined),
       )
       .take(batch);
+    // Counts events actually queued, not rows visited. `scheduleDelivery` declines when the
+    // instance is unconfigured, paused, or the row is no longer pending, and reporting those
+    // as requeued would put a number in the audit trail that describes nothing that happened.
     let requeued = 0;
     for (const event of waiting) {
-      await scheduleDelivery(ctx, event._id);
-      requeued += 1;
+      if (await scheduleDelivery(ctx, event._id)) requeued += 1;
     }
+    // Written after the loop, not before it: `count` is the number of events this call
+    // actually put back to work, and that number does not exist until the loop has run.
+    await patchSettings(ctx, {
+      lastOperatorAction: {
+        kind: "resume" as const,
+        actor: recordActor(actor),
+        at: Date.now(),
+        count: requeued,
+      },
+    });
     return { paused: false, requeued };
+  },
+});
+
+/**
+ * Replay dead letters, a bounded batch at a time.
+ *
+ * Bounded for the same reason `resume` is: a destination that has been failing can have
+ * accumulated an arbitrary number of them, and one mutation cannot rewrite all of it. Hosts
+ * loop while `remaining` is true. The component authenticates nobody, so a host must
+ * authorize the caller and pass whatever identifier it wants recorded.
+ */
+export const replayFailed = mutation({
+  args: {
+    limit: v.optional(v.number()),
+    actor: v.optional(v.string()),
+  },
+  returns: v.object({ replayed: v.number(), remaining: v.boolean() }),
+  handler: async (ctx, { limit, actor }) => {
+    const batch = boundedBatch(limit, DEFAULT_REPLAY_LIMIT, MAX_REPLAY_LIMIT);
+    // One row past the batch, so `remaining` is answered by the same read rather than by a
+    // second query that could disagree with it.
+    //
+    // There is deliberately no category filter here. Requeuing is what moves this window
+    // forward: a replayed row leaves the `failed` range, so the next call reads the rows
+    // behind it. A filter applied to the page after the read breaks that — rows that do
+    // not match stay `failed`, the window never advances, and any category whose rows sit
+    // past the first page is unreachable while the call reports `remaining: false`. Doing
+    // it correctly means indexing the category rather than filtering a page, which is
+    // FTD-2527. Replaying one event at a time is `replayEvent`.
+    //
+    // Ordered by `updatedAt`, NOT `createdAt`. An event that is replayed, sent, and fails
+    // again comes straight back to `failed`; ordered by creation it would return to the
+    // same position at the front of the range and be picked again on the very next call,
+    // so a destination that is still broken means the oldest few events are replayed over
+    // and over while everything behind them is never reached. Measured before this was
+    // changed: five dead letters, three call-and-drain cycles at `limit: 2`, and two events
+    // had been replayed three times each while the other three had not been replayed at
+    // all. `updatedAt` sends a re-failed row to the back, so every dead letter is tried
+    // once before any is tried twice.
+    const found = await ctx.db
+      .query("events")
+      .withIndex("by_state_updatedAt", (q) => q.eq("state", "failed"))
+      .take(batch + 1);
+    const selected = found.slice(0, batch);
+
+    for (const event of selected) await requeueDeadLetter(ctx, event);
+    await patchSettings(ctx, {
+      lastOperatorAction: {
+        kind: "replayFailed" as const,
+        actor: recordActor(actor),
+        at: Date.now(),
+        count: selected.length,
+      },
+    });
+    return { replayed: selected.length, remaining: found.length > selected.length };
+  },
+});
+
+/** Replay one dead letter by its identity. Reports honestly when there is nothing to do. */
+export const replayEvent = mutation({
+  args: { ...vEventIdentity.fields, actor: v.optional(v.string()) },
+  returns: v.object({ replayed: v.boolean() }),
+  handler: async (ctx, { datasource, eventId, actor }) => {
+    const event = await ctx.db
+      .query("events")
+      .withIndex("by_identity", (q) => q.eq("datasource", datasource).eq("eventId", eventId))
+      .unique();
+    // Only a dead letter can be replayed: an event that is waiting or in flight already has
+    // a worker, and one that was delivered must not be sent again on an operator's say-so.
+    const replayed = event !== null && event.state === "failed";
+    if (replayed) await requeueDeadLetter(ctx, event);
+    await patchSettings(ctx, {
+      lastOperatorAction: {
+        kind: "replayEvent" as const,
+        actor: recordActor(actor),
+        at: Date.now(),
+        count: replayed ? 1 : 0,
+      },
+    });
+    return { replayed };
   },
 });

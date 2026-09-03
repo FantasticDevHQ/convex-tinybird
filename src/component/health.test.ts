@@ -155,7 +155,7 @@ describe("health — what is waiting", () => {
     // for any fixture that fits in memory, and the harm only appears on a real backlog big
     // enough to exceed Convex's read limit, where the query fails outright instead of
     // reporting a large number. So the assertion is on the call itself.
-    const source = readFileSync(new URL("./lib.ts", import.meta.url), "utf8");
+    const source = readFileSync(new URL("./state.ts", import.meta.url), "utf8");
     const start = source.indexOf("async function boundedCount");
     // Not vacuous on a rename: an absent helper fails here rather than matching an empty
     // slice.
@@ -279,7 +279,7 @@ describe("heartbeat", () => {
   it("reads only the settings row and the oldest waiting event", () => {
     // Behaviourally indistinguishable from a counting implementation, for the same reason
     // the bounded read is: the harness enforces no read limit. Assert the shape instead.
-    const source = readFileSync(new URL("./lib.ts", import.meta.url), "utf8");
+    const source = readFileSync(new URL("./state.ts", import.meta.url), "utf8");
     const start = source.indexOf("async function readHeartbeat");
     expect(start).toBeGreaterThan(-1);
     const body = source

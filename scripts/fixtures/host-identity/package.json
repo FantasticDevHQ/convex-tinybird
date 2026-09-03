@@ -1,0 +1,6 @@
+{
+  "name": "fixture-host-identity",
+  "dependencies": {
+    "convex": "*"
+  }
+}

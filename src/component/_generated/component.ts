@@ -181,6 +181,20 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { paused: boolean },
         Name
       >;
+      replayEvent: FunctionReference<
+        "mutation",
+        "internal",
+        { actor?: string; datasource: string; eventId: string },
+        { replayed: boolean },
+        Name
+      >;
+      replayFailed: FunctionReference<
+        "mutation",
+        "internal",
+        { actor?: string; limit?: number },
+        { remaining: boolean; replayed: number },
+        Name
+      >;
       resume: FunctionReference<
         "mutation",
         "internal",

@@ -17,6 +17,7 @@ import type * as destination from "../destination.js";
 import type * as lib from "../lib.js";
 import type * as pool from "../pool.js";
 import type * as sanitize from "../sanitize.js";
+import type * as state from "../state.js";
 
 import type {
   ApiFromModules,
@@ -35,6 +36,7 @@ const fullApi: ApiFromModules<{
   lib: typeof lib;
   pool: typeof pool;
   sanitize: typeof sanitize;
+  state: typeof state;
 }> = anyApi as any;
 
 /**

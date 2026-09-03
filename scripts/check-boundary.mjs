@@ -20,6 +20,36 @@ import { fileURLToPath } from "node:url";
 /** Runtime dependencies the component may declare, in `dependencies` or `peerDependencies`. */
 export const ALLOWED_RUNTIME_DEPENDENCIES = new Set(["convex", "@convex-dev/workpool"]);
 
+/**
+ * Source constructs that reach into the HOST rather than into a package, so no import
+ * records them and `FORBIDDEN_SPECIFIER_PATTERNS` cannot see them.
+ *
+ * Reading the caller's identity is the whole reason this list exists. Authorization is the host's job: the
+ * component takes an opaque `actor` string and authenticates nobody, so a component that
+ * started reading the caller's identity would be making a policy decision on the host's
+ * behalf while looking like ordinary code. It needs no import, so the import gate above
+ * lets it straight through, and a grep proving it absent today proves nothing tomorrow.
+ *
+ * Two patterns, because one spelling is not the capability. An earlier version matched only
+ * `ctx.auth` and was got past five ways out of six — destructuring, bracket access, an alias,
+ * a parameter destructure (`handler: async ({ auth }) => …`, which is idiomatic Convex rather
+ * than contrived), and a helper taking the context. `getUserIdentity` is what closes it, and
+ * it closes it completely rather than merely more widely: Convex's `Auth` interface has
+ * exactly one member (convex 1.44.0, `src/server/authentication.ts`), so there is no other
+ * way to read caller identity from a function context. `ctx.auth` stays as the second
+ * pattern because handing the auth object to something else is worth catching too.
+ */
+export const FORBIDDEN_SOURCE_PATTERNS = [
+  {
+    pattern: /\bgetUserIdentity\b/u,
+    why: "reads the caller's identity; authorization is the host's job",
+  },
+  {
+    pattern: /\bctx\s*\.\s*auth\b/u,
+    why: "hands the caller's identity around; authorization is the host's job",
+  },
+];
+
 /** Import specifiers that mean the component reached into the host or the monorepo. */
 export const FORBIDDEN_SPECIFIER_PATTERNS = [
   /^@fantastic-dev\//,
@@ -31,6 +61,121 @@ export const FORBIDDEN_SPECIFIER_PATTERNS = [
 
 const IMPORT_PATTERN =
   /(?:^|\n)\s*(?:import|export)\s[^'";]*?\sfrom\s*['"]([^'"]+)['"]|(?:^|\n)\s*import\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
+
+/**
+ * Everything that is not executable code, blanked out.
+ *
+ * The source patterns must see code and only code, in BOTH directions. A comment explaining
+ * why a construct is banned must not trip the ban — this package documents the rule in the
+ * files it guards — and neither must a string literal, so an error message may name
+ * `ctx.auth` in its text. A gate that rejects legitimate code gets switched off, which
+ * costs more than the hole it was covering.
+ *
+ * This is a scanner rather than a pair of regular expressions because the naive version has
+ * a real bypass: stripping `//` to end of line first blinds every line containing `//`
+ * inside a string, and `destination.ts` begins with `"https://api.tinybird.co"`. Any
+ * identity read joined onto such a line would have passed clean.
+ *
+ * Quotes are replaced with empty content rather than deleted so that string boundaries
+ * cannot fuse two identifiers into one.
+ *
+ * A quoted string ends at a newline, because one cannot legally span a line. That rule is
+ * load-bearing rather than tidy: a SINGLE stray quote -- from a regex literal, say -- runs to
+ * end of file and is reported either way, but a PAIR would otherwise cancel across the lines
+ * between them and swallow whatever sits in the gap with no report at all, which is the one
+ * outcome worse than a false positive.
+ *
+ * Known residual: a pair of stray BACKTICKS still cancels. Template literals legitimately
+ * span lines, so the same rule cannot apply to them, and two regex literals each containing a
+ * backtick, in one file, with an identity read between them, reads clean. A single stray
+ * backtick always reports, because it leaves the file's count odd. That shape is deliberate
+ * construction rather than a slip, which is the line this gate draws: it detects drift, and
+ * it does not pretend to stop an author who is trying.
+ */
+function codeOnly(text) {
+  const stack = [];
+  const top = () => (stack.length === 0 ? undefined : stack[stack.length - 1]);
+  let out = "";
+  let unterminated = null;
+  let i = 0;
+
+  while (i < text.length) {
+    const c = text[i];
+    const two = text.slice(i, i + 2);
+
+    // Inside a template literal's TEXT: not code, but `${` returns to code.
+    if (top()?.kind === "template") {
+      if (c === "\\") {
+        i += 2;
+      } else if (two === "${") {
+        stack.push({ kind: "substitution", depth: 0 });
+        i += 2;
+      } else if (c === "`") {
+        stack.pop();
+        i += 1;
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+
+    if (two === "//") {
+      while (i < text.length && text[i] !== "\n") i += 1;
+      continue;
+    }
+    if (two === "/*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 2;
+      continue;
+    }
+    if (c === "`") {
+      stack.push({ kind: "template" });
+      out += "``";
+      i += 1;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      // Quotes are replaced with empty content rather than deleted, so string boundaries
+      // cannot fuse two identifiers into one.
+      out += c + c;
+      i += 1;
+      let closed = false;
+      while (i < text.length) {
+        if (text[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        // A quoted string cannot span a line, so a newline means this was never a string.
+        if (text[i] === "\n") break;
+        if (text[i] === c) {
+          i += 1;
+          closed = true;
+          break;
+        }
+        i += 1;
+      }
+      if (!closed) unterminated ??= c;
+      continue;
+    }
+    // Braces are tracked only inside a substitution, so an object literal or a block within
+    // one does not close it early.
+    if (c === "{" && top()?.kind === "substitution") {
+      top().depth += 1;
+    } else if (c === "}" && top()?.kind === "substitution") {
+      if (top().depth === 0) {
+        stack.pop();
+        i += 1;
+        continue;
+      }
+      top().depth -= 1;
+    }
+    out += c;
+    i += 1;
+  }
+
+  if (unterminated === null && stack.length > 0) unterminated = "`";
+  return { code: out, unterminated };
+}
 
 function sourceFiles(dir) {
   return readdirSync(dir, { recursive: true })
@@ -77,6 +222,28 @@ export function checkBoundary(packageRoot) {
   for (const file of sourceFiles(src)) {
     const path = join(src, file);
     const text = readFileSync(path, "utf8");
+    const { code, unterminated } = codeOnly(text);
+    if (unterminated !== null) {
+      // The scanner does not lex regular expressions, so a quote character inside one --
+      // `/"/gu`, or an apostrophe in a character class -- opens a string that never closes.
+      // From there it reads code as string and string as code, which breaks the gate in
+      // BOTH directions: an identity read after such a line is swallowed, and a legitimate
+      // mention inside a later string is emitted as code and rejected. Every such misread
+      // ends the file still inside a string and nothing legitimate does, so this turns a
+      // silent wrong answer into a loud one. Lexing regex literals correctly needs
+      // previous-token context and is its own corner-case farm; refusing to guess is better.
+      failures.push(
+        `src/${file}: unterminated ${unterminated} string — the boundary scanner cannot read ` +
+          `this file, so it cannot be cleared. A regular expression containing a quote is the ` +
+          `usual cause; assign it via a name the scanner can see, or split the line.`,
+      );
+      continue;
+    }
+    for (const { pattern, why } of FORBIDDEN_SOURCE_PATTERNS) {
+      if (pattern.test(code)) {
+        failures.push(`src/${file}: forbidden construct ${pattern.source} — ${why}`);
+      }
+    }
     for (const specifier of specifiersIn(text)) {
       if (FORBIDDEN_SPECIFIER_PATTERNS.some((pattern) => pattern.test(specifier))) {
         failures.push(`src/${file}: forbidden import "${specifier}"`);

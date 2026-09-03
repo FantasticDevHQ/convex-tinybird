@@ -1,0 +1,6 @@
+{
+  "name": "fixture-host-url-string",
+  "dependencies": {
+    "convex": "*"
+  }
+}

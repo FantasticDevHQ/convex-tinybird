@@ -307,6 +307,10 @@ describe("the pool's verdict", () => {
     await enqueueOne(t);
     const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
     await t.mutation(internal.lib.markDelivering, { eventId });
+    // The row holds the item being cancelled, which is what scheduling would have left. A
+    // `delivering` row with no work item at all cannot occur in production — nothing
+    // schedules on an unconfigured instance, so no completion would ever arrive for it.
+    await t.run(async (ctx) => ctx.db.patch(eventId, { workId: "canceled-work-id" }));
 
     await t.mutation(internal.lib.onDeliveryComplete, {
       workId: "canceled-work-id" as WorkId,
@@ -315,6 +319,34 @@ describe("the pool's verdict", () => {
     });
 
     expect(await statusOf(t)).toMatchObject({ state: "pending" });
+  });
+
+  it("ignores a cancellation for a work item the event no longer holds", async () => {
+    // The same ownership rule as the failure path. A cancellation that arrives after the
+    // row moved on must not resurrect it: the row is `delivering` under a DIFFERENT worker,
+    // and returning it to `pending` would let `resume` hand it a second one.
+    //
+    // This is the ONLY test pinning the verdict half of that rule. Its companion in
+    // replay.test.ts — `ignores a completion for a work item the event no longer holds` —
+    // uses a `success` result, for which refusing the whole completion and refusing only the
+    // marker clear are equivalent, so it cannot tell them apart. The verdict half was the
+    // live defect, so do not delete or weaken this without replacing the coverage.
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+    await enqueueOne(t);
+    const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
+    await t.mutation(internal.lib.markDelivering, { eventId });
+    await t.run(async (ctx) => ctx.db.patch(eventId, { workId: "the-current-item" }));
+
+    await t.mutation(internal.lib.onDeliveryComplete, {
+      workId: "an-earlier-item" as WorkId,
+      context: { eventId },
+      result: { kind: "canceled" },
+    });
+
+    expect(await statusOf(t)).toMatchObject({ state: "delivering" });
+    const held = await t.run(async (ctx) => (await ctx.db.get(eventId))?.workId);
+    expect(held).toBe("the-current-item");
   });
 });
 

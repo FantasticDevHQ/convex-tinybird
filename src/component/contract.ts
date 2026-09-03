@@ -23,6 +23,64 @@ export const HARD_MAX_PAYLOAD_BYTES = 524_288;
 export const MAX_EVENT_ID_LENGTH = 256;
 /** Tinybird datasource names: letters, digits and underscores only. */
 export const DATASOURCE_NAME_PATTERN = /^[A-Za-z0-9_]{1,128}$/;
+/**
+ * How many dead letters one `replayFailed` call returns to the queue by default.
+ *
+ * Sized from bytes, not from taste. Convex returns WHOLE documents and caps a call at about
+ * 8 MiB, and an `events` row carries its payload, so the cost is rows x row size rather than
+ * rows. One replayed row costs THREE passes over itself, not two: `replayFailed` reads it,
+ * `scheduleDelivery` reads it again to confirm it is still pending, and the patch writes it.
+ * With a row at payload plus roughly 2 KB of identity, error text and scalars:
+ *
+ * A batch of `n` costs `3n + 1` passes: `take(n + 1)`, then `n` re-reads, then `n` writes.
+ *
+ * | payload bound | passes fit in 8 MiB | at three-quarters |
+ * |---|---|---|
+ * | 1 KiB | ~909 | ~680 |
+ * | 64 KiB (default) | ~41 | ~30 |
+ * | 512 KiB (hard cap) | ~4 | ~3 |
+ *
+ * Twenty rows at the default bound is about 3.9 MiB, 49% of the budget. The right-hand
+ * column is what the docs recommend, because the numerator is an estimate: the ~2 KB of row
+ * overhead is approximate, `previousErrors` grows with every replay cycle, and the figure
+ * excludes the `settings` read, `patchSettings`, and whatever the nested Workpool writes per
+ * `enqueueAction`. This stops being a live constraint once payloads move off the counted row.
+ */
+export const DEFAULT_REPLAY_LIMIT = 20;
+
+/**
+ * The largest batch `replayFailed` will accept, however it is called.
+ *
+ * Separate from the default on purpose: a single clamp to the default would mean a host with
+ * 1 KB events could never ask for more than the conservative number chosen for hosts with
+ * 64 KiB ones, so the safe default would silently become a ceiling for everybody.
+ *
+ * Thirty is three-quarters of what fits at the DEFAULT payload bound, so the ceiling
+ * protects a host that has not thought about bytes at all, with the same margin the default
+ * has. Forty would also "fit" — at 97% of an estimate, which is precisely the objection that
+ * moved the default off 100 in the first place, so it would have made the two constants read
+ * as equally conservative when they were not.
+ *
+ * It is still not a promise for a host that raised `maxPayloadBytes`: such a host must pass
+ * its own `limit`, about `8 MiB / (4 x (maxPayloadBytes + 2 KB))`, which is 3 at the hard cap.
+ */
+export const MAX_REPLAY_LIMIT = 30;
+
+/**
+ * Turns a caller-supplied batch size into one `.take()` will accept.
+ *
+ * Shared by every bounded operator loop so they cannot drift apart. `.take()` rejects
+ * anything that is not a non-negative integer with a bare `TypeError` rather than one of
+ * this component's coded errors, and a host that computed its limit from a division, a
+ * config value or a subtraction has no reason to expect that shape. `NaN` is the case worth
+ * naming: it survives `Math.trunc`, `Math.min` and `Math.max` unchanged, so clamping alone
+ * does not stop it — every comparison against it is false.
+ */
+export function boundedBatch(limit: number | undefined, fallback: number, max: number): number {
+  const requested = limit !== undefined && Number.isFinite(limit) ? Math.trunc(limit) : fallback;
+  return Math.max(1, Math.min(requested, max));
+}
+
 /** How many waiting events one `resume` call puts back to work. */
 export const DEFAULT_RESUME_LIMIT = 100;
 

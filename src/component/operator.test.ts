@@ -14,6 +14,8 @@ import {
 
 installComponentTestHooks();
 
+const accepted = { successful_rows: 1, quarantined_rows: 0 };
+
 describe("a refused token pauses the destination", () => {
   it.each([401, 403])("pauses on %i instead of spending the retry budget", async (status) => {
     // Retrying a wrong token cannot help, and doing so would dead-letter the whole backlog
@@ -114,6 +116,77 @@ describe("resume", () => {
       paused: false,
       lastOperatorAction: { kind: "resume", actor: "operator_2" },
     });
+  });
+
+  it("records how many events each resume actually put back to work", async () => {
+    // A configured instance with a real backlog, because the audit count is the number of
+    // events the call requeued and an unconfigured instance requeues nothing. Asserting
+    // `count` against a fixture that can only ever produce zero would pass no matter what
+    // the code wrote.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, accepted)));
+    const t = setup();
+    await t.mutation(api.lib.pause, { actor: "operator_1" });
+    for (let i = 0; i < 5; i += 1) {
+      await t.mutation(api.lib.enqueue, {
+        datasource: "events",
+        eventId: `evt_${i}`,
+        payload: { ...row, event_id: `evt_${i}` },
+      });
+    }
+
+    // Two calls with different counts, so neither a hardcoded constant nor a zero can
+    // satisfy both legs.
+    expect(await t.mutation(api.lib.resume, { actor: "operator_2", limit: 3 })).toMatchObject({
+      requeued: 3,
+    });
+    expect(await settingsOf(t)).toMatchObject({
+      lastOperatorAction: { kind: "resume", actor: "operator_2", count: 3 },
+    });
+
+    expect(await t.mutation(api.lib.resume, { actor: "operator_2" })).toMatchObject({
+      requeued: 2,
+    });
+    expect(await settingsOf(t)).toMatchObject({
+      lastOperatorAction: { kind: "resume", actor: "operator_2", count: 2 },
+    });
+  });
+
+  it("does not claim to have requeued events it never scheduled", async () => {
+    // Unconfigured, so `scheduleDelivery` declines every row. The events are genuinely
+    // there and genuinely waiting — the `waiting` index finds all four — so a count of
+    // rows VISITED reads four while nothing was queued at all. That number is returned to
+    // the caller and written durably into the operator audit trail, where it is the record
+    // of what the action did.
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+    for (let i = 0; i < 4; i += 1) {
+      await t.mutation(api.lib.enqueue, {
+        datasource: "events",
+        eventId: `evt_${i}`,
+        payload: { ...row, event_id: `evt_${i}` },
+      });
+    }
+
+    expect(await t.mutation(api.lib.resume, { actor: "operator_1" })).toEqual({
+      paused: false,
+      requeued: 0,
+    });
+    expect(await settingsOf(t)).toMatchObject({
+      lastOperatorAction: { kind: "resume", count: 0 },
+    });
+
+    // The rows really are unscheduled, so this is not passing because the fixture was empty.
+    const waiting = await t.run(async (ctx) => {
+      // eslint-disable-next-line @convex-dev/no-collect-in-query
+      const events = await ctx.db.query("events").collect();
+      return {
+        total: events.length,
+        pendingWithoutWork: events.filter(
+          (event) => event.state === "pending" && event.workId === undefined,
+        ).length,
+      };
+    });
+    expect(waiting).toEqual({ total: 4, pendingWithoutWork: 4 });
   });
 
   it("is a no-op that reports honestly when nothing is paused or waiting", async () => {

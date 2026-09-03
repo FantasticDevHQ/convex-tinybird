@@ -1,0 +1,6 @@
+{
+  "name": "fixture-host-regex-quote",
+  "dependencies": {
+    "convex": "*"
+  }
+}

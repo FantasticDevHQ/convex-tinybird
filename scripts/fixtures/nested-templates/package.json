@@ -1,0 +1,6 @@
+{
+  "name": "fixture-nested-templates",
+  "dependencies": {
+    "convex": "*"
+  }
+}
