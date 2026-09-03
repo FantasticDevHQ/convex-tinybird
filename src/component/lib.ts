@@ -123,7 +123,32 @@ export const enqueue = mutation({
         .query("payloads")
         .withIndex("by_event", (q) => q.eq("eventId", existing._id))
         .unique();
-      if (stored?.payload === payload) {
+      if (stored === null) {
+        // The event exists but its payload does not, so this is a `payload_missing` dead
+        // letter and THIS CALL IS THE ONLY THING THAT CAN FIX IT. `enqueue` is the sole
+        // surface that writes `payloads`, and a component's tables are unreachable from the
+        // host, so rejecting it as a conflict would leave the row stuck permanently:
+        // selected by replay, never deliverable, never countable down.
+        if (existing.state === "delivered") {
+          // Already sent. There is nothing to restore and nothing to resend.
+          return { outcome: "duplicate" as const, eventId, state: existing.state };
+        }
+        // The payload is gone, so it cannot be compared. `payloadBytes` survives on the
+        // event row and is the only evidence left of what was committed. A weak check, but
+        // the alternative is letting a repair silently substitute different content under an
+        // identity the host already treats as settled.
+        if (existing.payloadBytes !== payloadBytes) {
+          throw new ConvexError({
+            code: "identity_conflict" as const,
+            datasource: args.datasource,
+            eventId,
+          });
+        }
+        await ctx.db.insert("payloads", { eventId: existing._id, payload });
+        await requeueDeadLetter(ctx, existing);
+        return { outcome: "repaired" as const, eventId, state: "pending" as const };
+      }
+      if (stored.payload === payload) {
         return { outcome: "duplicate" as const, eventId, state: existing.state };
       }
       throw new ConvexError({

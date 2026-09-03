@@ -66,7 +66,18 @@ instance isolation needs no code.
 
 ## Retries and dead letters
 
-One dead letter is not a delivery failure at all: `payload_missing` means the event has no stored payload, so no request was ever made and no attempt was spent. It is a storage fault rather than a destination fault, and it is the one category that cannot be resolved by retrying — only by restoring the row.
+One dead letter is not a delivery failure at all: `payload_missing` means the event has no stored
+payload, so no request was ever made and no attempt was spent. It is a storage fault rather than a
+destination fault, and replaying it cannot help — delivery will find nothing again.
+
+The remedy is to enqueue the event again. `enqueue` is the only surface that writes `payloads`,
+and a component's tables are unreachable from the host, so a re-enqueue rejected as a conflict
+would leave the row stuck permanently: selected by replay, never deliverable, never countable
+down. Re-enqueueing the same identity when the payload row is absent therefore **restores** it and
+puts the event back to work, returning `repaired`. The payload cannot be compared, because it is
+gone; `payloadBytes` survives on the event row and is checked instead, so a repair with different
+content is still a conflict. An event already `delivered` is a duplicate, not a repair — there is
+nothing to resend.
 
 A response is one of three things: delivered, terminally failed, or worth another attempt.
 Terminal means the row will never be accepted as it stands (`400`, `404`, `413`, `422`, or rows
@@ -183,7 +194,8 @@ deployment that already holds events written before this change has them with th
 `events` row, where nothing now reads it. Those events become **dead letters** on their first
 delivery attempt, with `lastError.category` set to `payload_missing` and a message saying there is
 nothing to send. They are counted by `health` and reachable by `replayFailed`, so an operator can
-find them, and can drain them if the payload rows are restored.
+find them — but replay alone cannot drain them, because delivery will find nothing again. Enqueue
+the same events a second time and the component restores the missing rows and delivers them.
 
 That is FTD-2531's doing, and it replaced something worse. Until it landed, `loadForDelivery`
 reported a missing payload the same way it reported a missing event — as a null — so the delivery

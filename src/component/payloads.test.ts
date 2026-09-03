@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 
 import { api, internal } from "./_generated/api";
+import { canonicalJson } from "./canonical";
 import {
   codeOf,
   drain,
@@ -186,9 +187,18 @@ describe("the payload lives outside the counted row", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const t = setup();
     await enqueueOne(t);
+    const id = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
     await t.run(async (ctx) => {
       const stored = await ctx.db.query("payloads").first();
       await ctx.db.delete(stored!._id);
+    });
+
+    // Asserted BEFORE the drain, and the ordering is the test. The action REPORTS the
+    // failure rather than throwing it, but the row converges either way — `markFailed`
+    // terminalises it, so a later call returns `skipped` and nothing else in the suite can
+    // tell a throw from a return. This is the only moment the distinction is observable.
+    expect(await t.action(internal.deliver.deliverEvent, { eventId: id })).toEqual({
+      outcome: "failed",
     });
     await drain(t);
 
@@ -196,7 +206,11 @@ describe("the payload lives outside the counted row", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
 
     const dead = await statusOf(t);
-    expect(dead).toMatchObject({ state: "failed" });
+    // `attempts: 0` is not decoration: it pins that a payload fault does not spend the retry
+    // budget, which both the commit message and architecture.md assert. Moving the check
+    // below `markDelivering` makes it 1, and an earlier round of review established exactly
+    // this — my rewrite dropped the field from the matcher and lost the coverage with it.
+    expect(dead).toMatchObject({ state: "failed", attempts: 0 });
     expect(dead?.lastError?.category).toBe("payload_missing");
     // A message an operator can act on, not just a category.
     expect(dead?.lastError?.message).toMatch(/payload/iu);
@@ -207,6 +221,63 @@ describe("the payload lives outside the counted row", () => {
     // gone — but an operator who restores the row can now drain it, which is the whole
     // difference between a dead letter and a stranded row.
     expect(await t.mutation(api.lib.replayFailed, {})).toEqual({ replayed: 1, remaining: false });
+  });
+
+  it("lets a re-enqueue of the same event restore a lost payload and drain it", async () => {
+    // The resolution the `payload_missing` category needs. Without it the dead letter is
+    // reachable but not drainable: `replayFailed` selects it, delivery finds nothing, and it
+    // returns to `failed` forever. `enqueue` is the ONLY surface a host has that writes
+    // `payloads` — a component's tables are unreachable from the host — so if a re-enqueue
+    // is rejected as a conflict, there is no remedy at all and the row is stuck permanently.
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await enqueueOne(t);
+    await t.run(async (ctx) => {
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+    });
+    await drain(t);
+    expect((await statusOf(t))?.lastError?.category).toBe("payload_missing");
+
+    // The same identity and the same payload the host committed originally.
+    expect(await enqueueOne(t)).toMatchObject({ outcome: "repaired", state: "pending" });
+    await drain(t);
+
+    const healed = await statusOf(t);
+    expect(healed).toMatchObject({ state: "delivered" });
+    // It really sent the restored payload, rather than merely changing state.
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(init.body).toBe(`${canonicalJson(row)}\n`);
+    // The failure that caused it is kept, because "why did this die" survives a repair.
+    expect(healed?.previousErrors?.map((e) => e.category)).toContain("payload_missing");
+  });
+
+  it("refuses to repair a lost payload with a different one", async () => {
+    // The payload itself is gone, so it cannot be compared. `payloadBytes` stays on the
+    // event row and is the only surviving evidence of what was committed — a weak check,
+    // but the alternative is letting a repair silently substitute different content under
+    // an identity a host already treats as settled.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, accepted)));
+    const t = setup();
+    await enqueueOne(t);
+    await t.run(async (ctx) => {
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+    });
+    await drain(t);
+
+    expect(
+      await codeOf(
+        t.mutation(api.lib.enqueue, {
+          datasource: "events",
+          eventId: "evt_1",
+          payload: { ...row, extra: "a much longer payload than the original" },
+        }),
+      ),
+    ).toBe("identity_conflict");
+    // Still no payload row: a refused repair must not leave a partial one.
+    expect(await t.run((ctx) => ctx.db.query("payloads").first())).toBeNull();
   });
 
   it("still treats a missing EVENT row as the benign race it is", async () => {

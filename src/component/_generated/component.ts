@@ -41,7 +41,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         },
         {
           eventId: string;
-          outcome: "enqueued" | "duplicate";
+          outcome: "enqueued" | "duplicate" | "repaired";
           state: "pending" | "delivering" | "delivered" | "failed";
         },
         Name

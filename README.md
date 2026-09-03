@@ -132,7 +132,7 @@ An event that Tinybird refused, or that ran out of attempts, is kept rather than
 cause is fixed, replay puts it back in the queue:
 
 ```ts
-// Bounded on purpose — see below. Ten passes at the default limit is 1000 events.
+// Bounded on purpose — see below. Ten passes at the default limit of 20 is 200 events.
 for (let pass = 0; pass < 10; pass += 1) {
   const { remaining } = await tinybird.replayFailed(ctx, { actor: userId });
   if (!remaining) break;
@@ -151,6 +151,12 @@ Replay walks the dead letters by when they last changed, not by when they were c
 event that is replayed and fails again goes to the back of the queue. Every dead letter is tried
 once before any is tried twice. Without that, a still-broken destination means the oldest few
 events are replayed over and over while everything behind them is never reached at all.
+
+**One dead letter cannot be replayed away.** `payload_missing` means the event has no stored
+payload, so there is nothing to send and delivery will find nothing again however many times you
+replay it. Enqueue the same event a second time instead: `enqueue` restores the missing row and
+returns `repaired`. Anything else with that identity is still a conflict, checked against the
+byte length the event row kept.
 
 **The operator controls are mount-wide.** `enqueue` and `getStatus` take a datasource, but
 `pause`, `resume`, `health` and `replayFailed` do not, so a mount carrying more than one

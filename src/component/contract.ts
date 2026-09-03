@@ -201,7 +201,16 @@ export const vEnqueueArgs = v.object({
 export type EnqueueArgs = Infer<typeof vEnqueueArgs>;
 
 export const vEnqueueResult = v.object({
-  outcome: v.union(v.literal("enqueued"), v.literal("duplicate")),
+  /**
+   * `repaired` means the event already existed but its payload row did not, and this call
+   * restored it and put the event back to work.
+   *
+   * It is a distinct outcome rather than `enqueued` because nothing new was created, and
+   * rather than `duplicate` because something did happen. A host that sees it has just
+   * healed a `payload_missing` dead letter, which is worth surfacing: it means something had
+   * previously deleted one of the two rows without the other.
+   */
+  outcome: v.union(v.literal("enqueued"), v.literal("duplicate"), v.literal("repaired")),
   eventId: v.string(),
   state: vEventState,
 });
