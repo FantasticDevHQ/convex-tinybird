@@ -101,6 +101,15 @@ payload now lives in `payloads`, keyed by event and read only when delivering an
 comparing a duplicate, so an event row is about 2 KB whatever the event carries and the row
 cap is once again the thing that binds.
 
+That makes the cap reachable for the first time, and it is now the next thing to bind. `health`
+counts three states, so a full cap is 3003 documents; a fully decorated row — `eventId` up to
+256, `datasource` up to 128, `lastError`, and `previousErrors` holding up to `MAX_ERROR_HISTORY`
+more messages of 200 — is about 2.1 KB, which comes to roughly 6.1 MiB of the ~8 MiB budget.
+That is not a hypothetical shape: a sustained outage produces exactly a thousand failed rows
+each carrying a full history, so the worst case and the alerting case are the same case.
+Tracked as FTD-2530. `heartbeat` reads two documents and is unaffected, which is why it is what
+a monitor should poll.
+
 That failure was a property of the schema rather than of the query, which is why the fix was a
 schema change and not a smaller cap.
 

@@ -53,7 +53,12 @@ describe("the payload lives outside the counted row", () => {
     expect(stored?.payload).toContain(marker);
   });
 
-  it("writes both rows or neither", async () => {
+  it("keeps exactly one payload per event across a rejected re-enqueue", async () => {
+    // Note what this does and does not establish. "A rollback leaves neither row" is
+    // Convex's guarantee, not this code's: moving the validation below both inserts leaves
+    // this test green, which independent verification confirmed by doing it. The pairing
+    // that is NOT free is one payload per event — a conflicting re-enqueue must not add a
+    // second one, and nothing but this asserts that.
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, accepted)));
     const t = setup();
 
@@ -142,7 +147,18 @@ describe("the payload lives outside the counted row", () => {
     // The payload is the one field in this component that can carry customer data, so it
     // must not reach any of them even when the destination is failing.
     const marker = "canary_payload_value";
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(400, { error: "nope" })));
+    // The refusal body ECHOES the payload, the way a real Tinybird schema error quotes the
+    // row it rejected. Without that, a future change that copied `body.error` into the
+    // recorded message would leak the payload and this test would stay green — the canary
+    // would be watching a string that never contained the marker in the first place.
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(400, { error: `cannot parse row: {"secret":"${marker}"}` }),
+        ),
+    );
     const t = setup();
     await t.mutation(api.lib.enqueue, {
       datasource: "events",

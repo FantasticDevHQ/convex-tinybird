@@ -145,9 +145,13 @@ export const enqueue = mutation({
       ...(args.retry ? { retry: args.retry } : {}),
       ...(args.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: args.requestTimeoutMs }),
     });
-    // Same mutation, so same transaction: either both rows exist or neither does. Every
-    // rejection above happens before this point precisely so a half-written pair is not
-    // reachable.
+    // Same mutation, so same transaction: either both rows exist or neither does.
+    //
+    // That is Convex's guarantee, not this ordering's. Moving the validation below these
+    // inserts would still roll both back, and independent verification proved it by doing
+    // exactly that — the whole suite stayed green. The ordering is tidiness; the atomicity
+    // is the runtime. What is NOT free, and is tested, is that one event has exactly one
+    // payload row: a conflicting re-enqueue must not leave a second one behind.
     await ctx.db.insert("payloads", { eventId: id, payload });
     await scheduleDelivery(ctx, id);
     return { outcome: "enqueued" as const, eventId, state: "pending" as const };
