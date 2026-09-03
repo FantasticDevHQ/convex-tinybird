@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 import { api } from "./_generated/api";
 import {
@@ -198,8 +198,20 @@ describe("the payload lives outside the counted row", () => {
     // `failed` — and resume re-queues it into the same silent skip. The only moving signal
     // is `oldestPendingAgeMs`. Making that a dead letter needs a failure category the
     // contract does not have, which is FTD-2531.
-    expect(await statusOf(t)).toMatchObject({ state: "pending", attempts: 0 });
-    expect((await statusOf(t))?.lastError).toBeUndefined();
+    const stranded = await statusOf(t);
+    // `attempts: 0` is not decoration: it pins that a payload fault does not spend the retry
+    // budget. Claiming the row via `markDelivering` before loading the payload would make it
+    // 1, and verification confirmed that reordering reds exactly this line.
+    expect(stranded).toMatchObject({ state: "pending", attempts: 0 });
+    // Read off a non-null local rather than through an optional chain, which would pass
+    // vacuously if `statusOf` ever returned null.
+    expect(stranded?.lastError).toBeUndefined();
+
+    // A FORWARD tripwire, not evidence about today. Nothing in this fixture can produce a
+    // `failed` row under any mutation of the current code, so this cannot fail for the
+    // reason the stranding story gives. It starts meaning something when FTD-2531 makes a
+    // payload-less event a dead letter — at which point this line should be inverted, not
+    // deleted.
     expect((await t.query(api.lib.health, {})).counts.failed.count).toBe(0);
   });
 
@@ -207,32 +219,36 @@ describe("the payload lives outside the counted row", () => {
     // A source assertion, because convex-test enforces no byte limit and so cannot show the
     // cost. Anchored on the call shape rather than a word, comments stripped first.
     //
-    // Every file, not just `lib.ts`. `scheduleDelivery`, `boundedCount` and `readHeartbeat`
-    // live in `state.ts`, and `scheduleDelivery` runs once per row on exactly the paged
-    // paths this ticket exists to make cheap — `resume` and both replays. An earlier
-    // version of this test read `lib.ts` alone, and independent verification put a real
-    // per-row payload read inside `scheduleDelivery` with the whole suite still green.
-    const read = (name: string) =>
-      readFileSync(new URL(`./${name}`, import.meta.url), "utf8").replace(
-        /\/\/[^\n]*|\/\*[\s\S]*?\*\//gu,
-        "",
-      );
-    const counts = Object.fromEntries(
-      ["lib.ts", "state.ts", "deliver.ts", "canonical.ts", "classify.ts", "destination.ts"].map(
-        (name) => [name, (read(name).match(/query\("payloads"\)/gu) ?? []).length],
-      ),
+    // ENUMERATED, not listed. Two earlier versions of this test were blind in the same way
+    // for different reasons: the first read `lib.ts` alone, and independent verification put
+    // a per-row payload read inside `scheduleDelivery` in `state.ts` with the suite green;
+    // the second named six files, and a new `retention.ts` with a per-row read inside a
+    // paged loop was equally invisible. A hardcoded list cannot see the file that does not
+    // exist yet, and retention is the next file this component gains.
+    //
+    // Note the failure mode is not that someone loosens this guard when a file is added —
+    // it is that nobody has to, because the new file is silently uncounted.
+    const dir = new URL(".", import.meta.url);
+    const files = readdirSync(dir).filter(
+      (name) => name.endsWith(".ts") && !name.includes(".test."),
+    );
+    // A floor, so an empty or mis-scoped glob cannot pass by reading nothing at all.
+    expect(files.length).toBeGreaterThan(6);
+
+    const reads = Object.fromEntries(
+      files.map((name) => {
+        const source = readFileSync(new URL(name, dir), "utf8").replace(
+          /\/\/[^\n]*|\/\*[\s\S]*?\*\//gu,
+          "",
+        );
+        return [name, (source.match(/query\("payloads"\)/gu) ?? []).length];
+      }),
     );
 
-    // Two in `lib.ts`: the dedupe comparison in `enqueue`, and `loadForDelivery`. Zero
-    // everywhere else. A third anywhere is a new consumer and has to be justified rather
-    // than added silently.
-    expect(counts).toEqual({
-      "lib.ts": 2,
-      "state.ts": 0,
-      "deliver.ts": 0,
-      "canonical.ts": 0,
-      "classify.ts": 0,
-      "destination.ts": 0,
-    });
+    // Two in `lib.ts`: the dedupe comparison in `enqueue`, and `loadForDelivery`.
+    expect(reads["lib.ts"]).toBe(2);
+    // Nowhere else, whatever else the component grows. Reported by name so a failure says
+    // which file gained a consumer rather than only that the count moved.
+    expect(Object.keys(reads).filter((name) => name !== "lib.ts" && reads[name] > 0)).toEqual([]);
   });
 });
