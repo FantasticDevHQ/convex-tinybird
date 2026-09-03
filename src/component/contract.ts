@@ -26,43 +26,24 @@ export const DATASOURCE_NAME_PATTERN = /^[A-Za-z0-9_]{1,128}$/;
 /**
  * How many dead letters one `replayFailed` call returns to the queue by default.
  *
- * Sized from bytes, not from taste. Convex returns WHOLE documents and caps a call at about
- * 8 MiB, and an `events` row carries its payload, so the cost is rows x row size rather than
- * rows. One replayed row costs THREE passes over itself, not two: `replayFailed` reads it,
- * `scheduleDelivery` reads it again to confirm it is still pending, and the patch writes it.
- * With a row at payload plus roughly 2 KB of identity, error text and scalars:
+ * Sized from bytes when the payload still lived on the event row, where a batch of `n` cost
+ * `3n + 1` passes over rows of `payload + ~2 KB` and 100 rows came to roughly 19 MiB against
+ * Convex's ~8 MiB per-call limit. FTD-2525 moved the payload to its own table, so a row is
+ * now about 2 KB whatever the event carries, and the same batch of 30 costs under 200 KB.
  *
- * A batch of `n` costs `3n + 1` passes: `take(n + 1)`, then `n` re-reads, then `n` writes.
- *
- * | payload bound | passes fit in 8 MiB | at three-quarters |
- * |---|---|---|
- * | 1 KiB | ~909 | ~680 |
- * | 64 KiB (default) | ~41 | ~30 |
- * | 512 KiB (hard cap) | ~4 | ~3 |
- *
- * Twenty rows at the default bound is about 3.9 MiB, 49% of the budget. The right-hand
- * column is what the docs recommend, because the numerator is an estimate: the ~2 KB of row
- * overhead is approximate, `previousErrors` grows with every replay cycle, and the figure
- * excludes the `settings` read, `patchSettings`, and whatever the nested Workpool writes per
- * `enqueueAction`. This stops being a live constraint once payloads move off the counted row.
+ * These values are therefore CONSERVATIVE rather than binding, and deliberately unchanged
+ * by that move: raising them is a behaviour change that deserves its own tests rather than
+ * a side effect of a storage change. What now binds first is Convex's document-scan limit,
+ * not bytes. See FTD-2529.
  */
 export const DEFAULT_REPLAY_LIMIT = 20;
 
 /**
  * The largest batch `replayFailed` will accept, however it is called.
  *
- * Separate from the default on purpose: a single clamp to the default would mean a host with
- * 1 KB events could never ask for more than the conservative number chosen for hosts with
- * 64 KiB ones, so the safe default would silently become a ceiling for everybody.
- *
- * Thirty is three-quarters of what fits at the DEFAULT payload bound, so the ceiling
- * protects a host that has not thought about bytes at all, with the same margin the default
- * has. Forty would also "fit" — at 97% of an estimate, which is precisely the objection that
- * moved the default off 100 in the first place, so it would have made the two constants read
- * as equally conservative when they were not.
- *
- * It is still not a promise for a host that raised `maxPayloadBytes`: such a host must pass
- * its own `limit`, about `8 MiB / (4 x (maxPayloadBytes + 2 KB))`, which is 3 at the hard cap.
+ * Separate from the default on purpose: a single clamp to the default would mean a host
+ * could never ask for more than the conservative number chosen for everyone else, so the
+ * safe default would silently become a ceiling.
  */
 export const MAX_REPLAY_LIMIT = 30;
 

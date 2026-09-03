@@ -9,6 +9,7 @@ import {
   installComponentTestHooks,
   jsonResponse,
   row,
+  seedEvent,
   setup,
   type TestInstance,
 } from "../testing/fixtures";
@@ -25,11 +26,9 @@ async function seedRows(
 ) {
   await t.run(async (ctx) => {
     for (let i = 0; i < count; i += 1) {
-      await ctx.db.insert("events", {
+      await seedEvent(ctx, {
         datasource: "events",
         eventId: `seed_${state}_${i}`,
-        payload: '{"seed":1}',
-        payloadBytes: 11,
         state,
         attempts: 0,
         createdAt: Date.now() + i,
@@ -79,11 +78,9 @@ describe("health — what is waiting", () => {
     const t = setup("");
     await t.run(async (ctx) => {
       for (const createdAt of [40_000, 90_000]) {
-        await ctx.db.insert("events", {
+        await seedEvent(ctx, {
           datasource: "events",
           eventId: `aged_${createdAt}`,
-          payload: '{"seed":1}',
-          payloadBytes: 11,
           state: "pending" as const,
           attempts: 0,
           createdAt,

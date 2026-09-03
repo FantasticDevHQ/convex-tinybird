@@ -5,7 +5,8 @@ import { ConvexError } from "convex/values";
 import workpool from "@convex-dev/workpool/test";
 
 import { api } from "../component/_generated/api";
-import type { Doc } from "../component/_generated/dataModel";
+import type { DatabaseWriter } from "../component/_generated/server";
+import type { Doc, Id } from "../component/_generated/dataModel";
 import schema from "../component/schema";
 
 /**
@@ -37,6 +38,36 @@ export function setup(token = "p.token"): TestInstance {
   const t = convexTest(schema, modules);
   workpool.register(t, "workpool");
   return t;
+}
+
+/**
+ * Seeds an event and its payload together, the way `enqueue` writes them.
+ *
+ * Seeding only the `events` row builds a state production cannot reach — `enqueue` writes
+ * both in one transaction — and a fixture in an impossible state proves nothing about the
+ * code that handles possible ones.
+ */
+export async function seedEvent(
+  ctx: { db: DatabaseWriter },
+  fields: Omit<Doc<"events">, "_id" | "_creationTime" | "payloadBytes"> & {
+    payload?: string;
+  },
+): Promise<Id<"events">> {
+  const { payload = '{"seed":1}', ...event } = fields;
+  const id = await ctx.db.insert("events", { ...event, payloadBytes: payload.length });
+  await ctx.db.insert("payloads", { eventId: id, payload });
+  return id;
+}
+
+/** The stored canonical payload for an event, which no longer lives on the event row. */
+export async function payloadOf(t: TestInstance, eventId: Id<"events">): Promise<string | null> {
+  return t.run(async (ctx) => {
+    const stored = await ctx.db
+      .query("payloads")
+      .withIndex("by_event", (q) => q.eq("eventId", eventId))
+      .unique();
+    return stored?.payload ?? null;
+  });
 }
 
 /** Runs the scheduled delivery to completion. */

@@ -68,10 +68,14 @@ an operator acts on.
 
 **Know the real cost before you rely on it.** The cap bounds _rows_, and Convex reads whole
 documents, so the bytes read are the row count multiplied by your event size. Convex allows about
-8 MiB per function call. With small events, a few hundred bytes each, the full cap is well inside
-that. With events near this component's default 64 KiB bound, the limit is reached at roughly a
-hundred unfinished events and `health` fails rather than reporting a large number, which is
-exactly when you need it.
+8 MiB per function call. Both are bounded here: the cap bounds documents, and since the payload
+moved to its own table an event row is about 2 KB whatever your events carry, so the bytes are
+bounded too. Before that split a `health` call failed at roughly 130 unfinished events at the
+default 64 KiB payload bound — the query whose purpose was to stay cheap, failing on exactly the
+backlog it exists to report.
+
+`heartbeat` is still the cheaper thing to poll on a schedule: it reads two documents and returns
+`paused` and `oldestPendingAgeMs` without any counts.
 
 **So alert on `heartbeat`, not on `health`.** It returns everything below except the counts, and
 reads exactly two documents no matter how much is queued or how large your events are, which is
@@ -153,23 +157,14 @@ events are replayed over and over while everything behind them is never reached 
 datasource cannot act on them independently — replaying to fix one datasource resends the
 other's dead letters too. Mount the component once per datasource.
 
-**The default batch is 20, and it is sized from bytes.** Convex returns whole documents and caps
-a call near 8 MiB, and an event row carries its payload. A batch of `n` costs `3n + 1` passes over
-a row: replay reads `n + 1`, scheduling re-reads `n` to confirm each is still pending, and the
-patch writes `n`. So budget `4 x (maxPayloadBytes + 2 KB)` per row — three passes plus margin,
-because the 2 KB of per-row overhead is an estimate and `previousErrors` grows with every replay
-cycle:
+**The default batch is 20, and the ceiling is 30.** Both were sized from bytes when the payload
+still lived on the event row, where a batch of 100 cost roughly 19 MiB against Convex's ~8 MiB
+per-call limit. The payload now lives in its own table, so an event row is about 2 KB whatever
+your events carry and the same batch costs well under a megabyte.
 
-| your `maxPayloadBytes` | recommended `limit`           |
-| ---------------------- | ----------------------------- |
-| 1 KiB                  | the ceiling of 30 binds first |
-| 64 KiB (the default)   | 30                            |
-| 512 KiB (the maximum)  | 3                             |
-
-The default of 20 uses 49% of the budget at the default bound, and the ceiling of 30 uses 73%.
-The ceiling protects a host that has not thought about bytes; it is not a promise for a host that
-raised `maxPayloadBytes`. If you did, pass your own `limit` from the table. Exceeding the real
-limit does not degrade: the call throws.
+So payload size and batch size are independent: raising `maxPayloadBytes` no longer means
+lowering `limit`. The values above are now conservative rather than binding, and they are left
+alone on purpose — raising them is a behaviour change that deserves its own tests.
 
 **Replay is not re-enqueue.** The identity and the payload are the ones the host committed, so a
 later matching enqueue is still a duplicate and a mismatched one is still a conflict. The attempt

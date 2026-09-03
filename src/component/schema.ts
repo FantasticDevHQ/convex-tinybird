@@ -17,8 +17,12 @@ import {
 export const events = defineTable({
   datasource: v.string(),
   eventId: v.string(),
-  /** Canonical JSON (sorted keys, no whitespace). Sent verbatim as one NDJSON line. */
-  payload: v.string(),
+  /**
+   * Size of the payload, kept here while the payload itself is not.
+   *
+   * The size is a scalar an operator may want without paying for the bytes; the payload is
+   * in `payloads`, read only when delivering and when comparing a duplicate.
+   */
   payloadBytes: v.number(),
   state: vEventState,
   attempts: v.number(),
@@ -40,6 +44,24 @@ export const events = defineTable({
   .index("by_state_workId_createdAt", ["state", "workId", "createdAt"])
   .index("by_state_updatedAt", ["state", "updatedAt"]);
 
+/**
+ * The payload, one row per event, keyed by it.
+ *
+ * Separate from `events` because Convex returns WHOLE documents and caps a call near 8 MiB,
+ * so a payload on the event row makes the cost of every paged read `rows x event size`
+ * rather than `rows`. `health`, `resume`, replay and retention all page over `events`, and
+ * an independent review of the health query found it failing at roughly 130 unfinished
+ * events at the default 64 KiB payload bound — the query whose whole purpose was to stay
+ * cheap, failing outright on exactly the backlog it exists to report.
+ *
+ * Nothing but delivery and the duplicate comparison reads this table.
+ */
+export const payloads = defineTable({
+  eventId: v.id("events"),
+  /** Canonical JSON (sorted keys, no whitespace). Sent verbatim as one NDJSON line. */
+  payload: v.string(),
+}).index("by_event", ["eventId"]);
+
 /** Single row, created lazily. Destination-wide state; never a credential. */
 export const settings = defineTable({
   paused: v.boolean(),
@@ -50,4 +72,4 @@ export const settings = defineTable({
   lastOperatorAction: v.optional(vOperatorAction),
 });
 
-export default defineSchema({ events, settings });
+export default defineSchema({ events, payloads, settings });

@@ -116,7 +116,14 @@ export const enqueue = mutation({
       .withIndex("by_identity", (q) => q.eq("datasource", args.datasource).eq("eventId", eventId))
       .unique();
     if (existing) {
-      if (existing.payload === payload) {
+      // The stored payload is one document away, and this is the only read of it outside
+      // delivery. Comparing sizes first would not be sound on its own — two different
+      // payloads can share a length — so the comparison is the canonical text itself.
+      const stored = await ctx.db
+        .query("payloads")
+        .withIndex("by_event", (q) => q.eq("eventId", existing._id))
+        .unique();
+      if (stored?.payload === payload) {
         return { outcome: "duplicate" as const, eventId, state: existing.state };
       }
       throw new ConvexError({
@@ -130,7 +137,6 @@ export const enqueue = mutation({
     const id = await ctx.db.insert("events", {
       datasource: args.datasource,
       eventId,
-      payload,
       payloadBytes,
       state: "pending",
       attempts: 0,
@@ -139,6 +145,10 @@ export const enqueue = mutation({
       ...(args.retry ? { retry: args.retry } : {}),
       ...(args.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: args.requestTimeoutMs }),
     });
+    // Same mutation, so same transaction: either both rows exist or neither does. Every
+    // rejection above happens before this point precisely so a half-written pair is not
+    // reachable.
+    await ctx.db.insert("payloads", { eventId: id, payload });
     await scheduleDelivery(ctx, id);
     return { outcome: "enqueued" as const, eventId, state: "pending" as const };
   },
@@ -185,10 +195,17 @@ export const loadForDelivery = internalQuery({
   handler: async (ctx, { eventId }) => {
     const event = await ctx.db.get(eventId);
     if (event === null) return null;
+    // The one place the payload is read for its own sake, and the reason it is a separate
+    // table: this runs once per delivery attempt, not once per paged operator read.
+    const stored = await ctx.db
+      .query("payloads")
+      .withIndex("by_event", (q) => q.eq("eventId", eventId))
+      .unique();
+    if (stored === null) return null;
     const settings = await ctx.db.query("settings").first();
     return {
       datasource: event.datasource,
-      payload: event.payload,
+      payload: stored.payload,
       state: event.state,
       paused: settings?.paused ?? false,
       requestTimeoutMs: event.requestTimeoutMs,

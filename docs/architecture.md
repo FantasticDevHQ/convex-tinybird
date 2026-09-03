@@ -92,26 +92,29 @@ practice rather than in theory.
 `health` counts unfinished work per state through `by_state_createdAt`, stopping at `COUNT_CAP`,
 and reads one further row for the oldest waiting event. That bounds the number of **documents**.
 
-It does not bound the **bytes**. Convex returns whole documents, and an event row carries its
-payload, so a health call reads roughly `rows x payload size`. Against Convex's per-call read
-limit of about 8 MiB this is comfortable for small events and is not for large ones: at the
-component's default 64 KiB payload bound the limit is reached at around a hundred unfinished
-events, and the query then fails outright instead of reporting a large number.
+It bounds the **bytes** as well, but only since FTD-2525. Convex returns whole documents, so
+while the payload lived on the event row the cost of a capped read was `rows x event size`
+rather than `rows`: at the component's default 64 KiB payload bound a `health` call failed at
+roughly 130 unfinished events, and at the 512 KiB hard cap at about 16 — the query whose whole
+purpose was to stay cheap, failing outright on exactly the backlog it exists to report. The
+payload now lives in `payloads`, keyed by event and read only when delivering and when
+comparing a duplicate, so an event row is about 2 KB whatever the event carries and the row
+cap is once again the thing that binds.
 
-That is the opposite of what an operator needs from a health check, and it is a property of the
-schema rather than of the query: the payload lives on the row being counted. `heartbeat` exists
-for that reason: it returns the same fields minus the counts and reads exactly two documents, the
-settings row and the oldest waiting event, so the two signals worth alerting on stay reachable on
-precisely the day the counts fail. Advertising cheap signals that live inside the expensive query
-would have made the advice useless exactly when it was needed. Moving payloads into
-their own table, so `events` rows are small and countable, is the fix, and it belongs with the
-retention work that already changes payload lifecycle. Until then the cost is documented rather
-than claimed away, and `oldestPendingAgeMs` and `paused` are the two signals that cost one row
-each regardless of event size.
+That failure was a property of the schema rather than of the query, which is why the fix was a
+schema change and not a smaller cap.
+
+`heartbeat` predates that fix and stays. It returns the same fields minus the counts and reads
+exactly two documents — the settings row and the oldest waiting event — so `paused` and
+`oldestPendingAgeMs`, the two signals worth alerting on, cost one row each whatever else is
+true. It was added so those signals stayed reachable on precisely the day the counts failed;
+now that they cannot fail that way, it remains the cheapest thing to poll on a schedule, and it
+is what a monitor should call rather than `health`.
 
 ## Replay
 
-A dead letter keeps its identity and its payload, so replaying one is not the same as enqueueing
+A dead letter keeps its identity and its payload — the payload row is never touched by replay —
+so replaying one is not the same as enqueueing
 it again: `(datasource, eventId)` is unchanged, which means a later enqueue with matching content
 is still a `duplicate` and one with different content is still an `identity_conflict`. Replay
 therefore cannot be used to smuggle a changed payload past the identity check.
@@ -143,24 +146,38 @@ behind it. A filter applied to the page after the read breaks that: rows that do
 still reports that nothing remains. Filtering by category correctly means indexing it rather than
 filtering a page, which is tracked separately. To replay one specific event, use `replayEvent`.
 
-Replay costs more than `health`, and the same arithmetic applies with less headroom. It reads
-whole documents and then patches every one of them in the same transaction, so a batch of `n`
-costs roughly `n x (payload + 2 KB)` read and again written. That is why the default batch is 20
-rather than the 100 that `resume` uses: at the default 64 KiB payload bound, 20 rows is about
-3.9 MiB against a limit near 8 MiB, where 100 would be about 19 MiB and would simply throw. The
-accepted ceiling is 30, three-quarters of what fits at that bound — the same margin the default
-has, so the two constants are conservative in the same way rather than only appearing to be. A host that raises `maxPayloadBytes` must lower `limit` to about
-`8 MiB / (4 x (maxPayloadBytes + 2 KB))`. A batch of `n` costs `3n + 1` passes — replay reads
-`n + 1`, `scheduleDelivery` re-reads `n` to confirm each is still pending, and the patch writes
-`n` — and the fourth factor is margin, because the per-row overhead is an estimate that grows
-with the failure history. At the 512 KiB hard cap that is 3, so no single default is safe for
-every host. This stops being a live constraint once payloads move off the
-counted row.
+Replay reads and writes only `events` rows, never `payloads`, so its cost is the row count times
+about 2 KB. A host that raises `maxPayloadBytes` no longer has to lower `limit` to compensate:
+payload size and batch size are now independent, which is the point of the split.
 
 Ordering by `updatedAt` has millisecond granularity, so rows patched inside one mutation tie and
 ties fall back to insertion order. A whole replay-and-drain cycle completing inside a single
 millisecond therefore degenerates to the old creation order. That needs a destination failing
 faster than the clock ticks, so it is a property worth knowing rather than a defect.
+
+## Storage layout, and the one migration this component does not do
+
+`events` holds identity, state, attempts, timestamps and errors. `payloads` holds the canonical
+JSON, one row per event, keyed by it. Enqueue writes both in a single mutation, so they are one
+transaction: every validation that can reject an event happens before either insert, and a
+rejection therefore leaves neither row.
+
+Only two places read `payloads`: the duplicate comparison in `enqueue`, which needs the canonical
+text to tell a duplicate from a conflict, and `loadForDelivery`, which needs it to send. Nothing
+else — not `getStatus`, not `health`, not `heartbeat`, not any recorded error — so the payload,
+the one field here that can carry customer data, never reaches an operator surface.
+
+**There is no migration for existing data, and that is a decision rather than an omission.** A
+deployment that already holds events written before this change has them with the payload on the
+`events` row, where nothing now reads it: those events would be stored, counted and reported, and
+would fail to deliver, because `loadForDelivery` returns null when the payload row is missing.
+
+The component is pre-release and unpublished — it has no external consumers and its only host is
+this repository, whose local deployment carries no events worth keeping. Writing and testing a
+backfill for data that does not exist would be work with no way to verify it against a real case.
+A deployment that does hold events should drop them before upgrading. If this component is ever
+published with existing installs, that changes, and the migration becomes a prerequisite rather
+than a note.
 
 ## Operator controls are mount-wide
 

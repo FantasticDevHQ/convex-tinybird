@@ -7,6 +7,7 @@ import {
   jsonResponse,
   row,
   settingsOf,
+  seedEvent,
   setup,
   statusOf,
   type TestInstance,
@@ -263,11 +264,9 @@ describe("resume batch bounds", () => {
   async function seedPending(t: TestInstance, count: number) {
     await t.run(async (ctx) => {
       for (let i = 0; i < count; i += 1) {
-        await ctx.db.insert("events", {
+        await seedEvent(ctx, {
           datasource: "events",
           eventId: `seed_${i}`,
-          payload: '{"seed":1}',
-          payloadBytes: 11,
           state: "pending" as const,
           attempts: 0,
           createdAt: Date.now() + i,
@@ -342,11 +341,10 @@ describe("resume against a large backlog", () => {
     const t = setup();
     await t.run(async (ctx) => {
       for (let i = 0; i < waiting; i += 1) {
-        await ctx.db.insert("events", {
+        await seedEvent(ctx, {
           datasource: "events",
           eventId: `backlog_${i}`,
           payload: '{"backlog":1}',
-          payloadBytes: 14,
           state: "pending" as const,
           attempts: 0,
           createdAt: Date.now() + i,

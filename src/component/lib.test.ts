@@ -3,6 +3,7 @@ import { ConvexError } from "convex/values";
 
 import { api } from "./_generated/api";
 import schema from "./schema";
+import { payloadOf } from "../testing/fixtures";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -96,12 +97,14 @@ describe("enqueue", () => {
     expect(result).toEqual({ outcome: "enqueued", eventId: "evt_1", state: "pending" });
     const stored = await t.run((ctx) => ctx.db.query("events").take(10));
     expect(stored).toHaveLength(1);
+    expect(await payloadOf(t, stored[0]._id)).toBe(
+      '{"event_id":"evt_1","kind":"order_created","total":12.5}',
+    );
     expect(stored[0]).toMatchObject({
       datasource: "events",
       eventId: "evt_1",
       state: "pending",
       attempts: 0,
-      payload: '{"event_id":"evt_1","kind":"order_created","total":12.5}',
       payloadBytes: 56,
     });
   });
@@ -138,7 +141,8 @@ describe("enqueue", () => {
     expect(code).toBe("identity_conflict");
     const stored = await t.run((ctx) => ctx.db.query("events").take(10));
     expect(stored).toHaveLength(1);
-    expect(stored[0].payload).toContain('"total":12.5');
+    // The payload is in its own table now; only its size stays on the row.
+    expect(await payloadOf(t, stored[0]._id)).toContain('"total":12.5');
   });
 
   it("keeps identities separate per datasource", async () => {

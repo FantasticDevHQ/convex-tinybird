@@ -7,8 +7,10 @@ import {
   enqueueWithRetry,
   installComponentTestHooks,
   jsonResponse,
+  payloadOf,
   row,
   settingsOf,
+  seedEvent,
   setup,
   statusOf,
   type TestInstance,
@@ -89,11 +91,14 @@ describe("replayFailed", () => {
     await drain(t);
 
     const after = await t.run(async (ctx) => (await ctx.db.query("events").first())!);
+    const payloadBefore = await payloadOf(t, before._id);
     expect(after.eventId).toBe(before.eventId);
-    expect(after.payload).toBe(before.payload);
+    // The payload moved to its own table in FTD-2525; it is still the SAME payload, which
+    // is what "replay is not re-enqueue" means.
+    expect(await payloadOf(t, after._id)).toBe(payloadBefore);
     expect(after.state).toBe("delivered");
     // The row Tinybird receives is the original, not a new one.
-    expect((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body).toBe(`${before.payload}\n`);
+    expect((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body).toBe(`${payloadBefore}\n`);
   });
 
   it("keeps the attempt history so an operator can still see why it died", async () => {
@@ -117,11 +122,9 @@ describe("replayFailed", () => {
     const t = setup("");
     await t.run(async (ctx) => {
       for (let i = 0; i < DEFAULT_REPLAY_LIMIT + 30; i += 1) {
-        await ctx.db.insert("events", {
+        await seedEvent(ctx, {
           datasource: "events",
           eventId: `dead_${i}`,
-          payload: '{"seed":1}',
-          payloadBytes: 11,
           state: "failed" as const,
           attempts: 1,
           createdAt: Date.now() + i,
@@ -343,11 +346,9 @@ describe("replayFailed", () => {
       // Large enough for every leg below to be bounded by the clamp rather than by the
       // backlog running out — the legs run in sequence and each one consumes rows.
       for (let i = 0; i < MAX_REPLAY_LIMIT * 2 + DEFAULT_REPLAY_LIMIT * 2 + 20; i += 1) {
-        await ctx.db.insert("events", {
+        await seedEvent(ctx, {
           datasource: "events",
           eventId: `dead_${i}`,
-          payload: '{"seed":1}',
-          payloadBytes: 11,
           state: "failed" as const,
           attempts: 1,
           createdAt: Date.now() + i,
