@@ -136,6 +136,8 @@ is what a monitor should call rather than `health`.
 ## Replay
 
 A dead letter keeps its identity and its payload — the payload row is never touched by replay —
+except for a `payload_missing` dead letter, which by definition has no payload row; repairing that
+one is `enqueue`'s job, not replay's —
 so replaying one is not the same as enqueueing
 it again: `(datasource, eventId)` is unchanged, which means a later enqueue with matching content
 is still a `duplicate` and one with different content is still an `identity_conflict`. Replay
@@ -189,31 +191,27 @@ text to tell a duplicate from a conflict, and `loadForDelivery`, which needs it 
 else — not `getStatus`, not `health`, not `heartbeat`, not any recorded error — so the payload,
 the one field here that can carry customer data, never reaches an operator surface.
 
-**There is no migration for existing data, and that is a decision rather than an omission.** A
-deployment that already holds events written before this change has them with the payload on the
-`events` row, where nothing now reads it. Those events become **dead letters** on their first
-delivery attempt, with `lastError.category` set to `payload_missing` and a message saying there is
-nothing to send. They are counted by `health` and reachable by `replayFailed`, so an operator can
-find them — but replay alone cannot drain them, because delivery will find nothing again. Enqueue
-the same events a second time and the component restores the missing rows and delivers them.
+**There is no migration for existing data, and that is a decision rather than an omission.** The
+component is pre-release and unpublished. Its only host is this repository, and no host code calls
+`enqueue` at all — `grep -riIl tinybird packages/backend/convex` returns the mount and generated
+types and nothing else — so there is no producer and no deployment that holds an event a backfill
+would have to move.
 
-That is FTD-2531's doing, and it replaced something worse. Until it landed, `loadForDelivery`
-reported a missing payload the same way it reported a missing event — as a null — so the delivery
-action read it as a benign race and skipped. The row stayed `pending` with `attempts: 0` and no
-recorded error: invisible to replay, which takes only `failed` rows, and re-queued by `resume`
-into the same silent skip forever. The only signal that moved was `oldestPendingAgeMs`, carrying
-no reason.
+A deployment that somehow did hold events written before the split would most likely fail the
+schema push rather than reach delivery: Convex validates existing documents on the first push
+after a schema changes, and a document carrying a `payload` field the table no longer declares
+does not match. That is the better failure — loud, at deploy time, before anything is lost. It is
+stated as a likelihood rather than a measurement: verifying it needs a deployment holding
+pre-split rows, and the local one is shared with every other worktree, so probing it there would
+disrupt work that has nothing to do with this.
 
-The two nulls are now distinguished, and both halves matter. A missing EVENT genuinely is a race —
-cleaned up, replayed elsewhere, already finished — and still records nothing. A missing PAYLOAD
-never resolves on its own, so recording it is the only way an operator learns of it.
+Either way the answer for such a deployment is to drop its events before upgrading. If this
+component is ever published with existing installs, that changes, and a migration becomes a
+prerequisite rather than a note.
 
-The component is pre-release and unpublished — it has no external consumers and its only host is
-this repository, whose local deployment carries no events worth keeping. Writing and testing a
-backfill for data that does not exist would be work with no way to verify it against a real case.
-A deployment that does hold events should drop them before upgrading. If this component is ever
-published with existing installs, that changes, and the migration becomes a prerequisite rather
-than a note.
+The `payload_missing` dead letter is therefore not justified by migration. It exists because
+something can delete one of the two rows without the other, and retention — FTD-2502 — is the
+first thing that will delete anything at all.
 
 ## Operator controls are mount-wide
 
