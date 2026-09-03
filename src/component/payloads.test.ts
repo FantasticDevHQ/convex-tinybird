@@ -175,16 +175,64 @@ describe("the payload lives outside the counted row", () => {
     expect(JSON.stringify(await settingsOf(t))).not.toContain(marker);
   });
 
+  it("refuses to send an event whose payload row is gone", async () => {
+    // The branch `architecture.md`'s migration note depends on, and nothing else reaches it:
+    // no code in this component deletes from either table, so only a hand-built fixture or a
+    // future retention sweep can produce a payload-less event. Deleting the guard leaves an
+    // event that POSTs an empty NDJSON line to Tinybird, which is worse than not sending.
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await enqueueOne(t);
+    await t.run(async (ctx) => {
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+    });
+    await drain(t);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    // And the honest consequence, which the migration note now states rather than implying
+    // a `failed` state an operator could find: the event is STRANDED. It stays `pending`
+    // with no attempt and no recorded error, so replay cannot reach it — replay only takes
+    // `failed` — and resume re-queues it into the same silent skip. The only moving signal
+    // is `oldestPendingAgeMs`. Making that a dead letter needs a failure category the
+    // contract does not have, which is FTD-2531.
+    expect(await statusOf(t)).toMatchObject({ state: "pending", attempts: 0 });
+    expect((await statusOf(t))?.lastError).toBeUndefined();
+    expect((await t.query(api.lib.health, {})).counts.failed.count).toBe(0);
+  });
+
   it("reads the payload only on the delivery path", () => {
-    // A source assertion, because convex-test enforces no byte limit and so cannot show
-    // the cost. Anchored on the call shape rather than a word, comments stripped first.
-    const source = readFileSync(new URL("./lib.ts", import.meta.url), "utf8").replace(
-      /\/\/[^\n]*|\/\*[\s\S]*?\*\//gu,
-      "",
+    // A source assertion, because convex-test enforces no byte limit and so cannot show the
+    // cost. Anchored on the call shape rather than a word, comments stripped first.
+    //
+    // Every file, not just `lib.ts`. `scheduleDelivery`, `boundedCount` and `readHeartbeat`
+    // live in `state.ts`, and `scheduleDelivery` runs once per row on exactly the paged
+    // paths this ticket exists to make cheap — `resume` and both replays. An earlier
+    // version of this test read `lib.ts` alone, and independent verification put a real
+    // per-row payload read inside `scheduleDelivery` with the whole suite still green.
+    const read = (name: string) =>
+      readFileSync(new URL(`./${name}`, import.meta.url), "utf8").replace(
+        /\/\/[^\n]*|\/\*[\s\S]*?\*\//gu,
+        "",
+      );
+    const counts = Object.fromEntries(
+      ["lib.ts", "state.ts", "deliver.ts", "canonical.ts", "classify.ts", "destination.ts"].map(
+        (name) => [name, (read(name).match(/query\("payloads"\)/gu) ?? []).length],
+      ),
     );
-    const reads = source.match(/query\("payloads"\)/gu) ?? [];
-    // Exactly two: the dedupe comparison in `enqueue`, and `loadForDelivery`. Any third is
-    // a new consumer and has to be justified rather than added silently.
-    expect(reads).toHaveLength(2);
+
+    // Two in `lib.ts`: the dedupe comparison in `enqueue`, and `loadForDelivery`. Zero
+    // everywhere else. A third anywhere is a new consumer and has to be justified rather
+    // than added silently.
+    expect(counts).toEqual({
+      "lib.ts": 2,
+      "state.ts": 0,
+      "deliver.ts": 0,
+      "canonical.ts": 0,
+      "classify.ts": 0,
+      "destination.ts": 0,
+    });
   });
 });

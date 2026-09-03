@@ -66,21 +66,21 @@ query reads at most a thousand rows per state and never scans the table. A cappe
 `capped: true` rather than an exact number, because "more than a thousand waiting" is the answer
 an operator acts on.
 
-**Know the real cost before you rely on it.** The cap bounds _rows_, and Convex reads whole
-documents, so the bytes read are the row count multiplied by your event size. Convex allows about
-8 MiB per function call. Both are bounded here: the cap bounds documents, and since the payload
-moved to its own table an event row is about 2 KB whatever your events carry, so the bytes are
-bounded too. Before that split a `health` call failed at roughly 130 unfinished events at the
-default 64 KiB payload bound — the query whose purpose was to stay cheap, failing on exactly the
-backlog it exists to report.
+**Know the real cost before you rely on it.** Convex reads whole documents and allows about 8 MiB
+per function call, so what matters is rows multiplied by row size. The cap bounds the rows, and
+since the payload moved to its own table an event row is about 2 KB whatever your events carry —
+so **event size no longer affects `health` at all**. Before that split it did: a call failed at
+roughly 130 unfinished events at the default 64 KiB payload bound, which is the query whose whole
+purpose was to stay cheap failing on exactly the backlog it exists to report.
 
-`heartbeat` is still the cheaper thing to poll on a schedule: it reads two documents and returns
-`paused` and `oldestPendingAgeMs` without any counts.
+What is left is the cap itself. `health` counts three states, so a full one is about 3000
+documents, and a row carrying a full failure history is nearer 2.1 KB — roughly three-quarters of
+the budget. That is comfortable rather than generous, and it is tracked in FTD-2530.
 
-**So alert on `heartbeat`, not on `health`.** It returns everything below except the counts, and
-reads exactly two documents no matter how much is queued or how large your events are, which is
-what keeps it working on the day `health` cannot. Reach for `health` when you want the numbers and
-know your events are small.
+**Alert on `heartbeat`, not on `health`.** It reads exactly two documents however much is queued,
+returns `paused` and `oldestPendingAgeMs`, and costs the same on your worst day as on your best.
+`health` is for a person asking a question, not for a monitor asking every minute — and you no
+longer have to know your events are small to reach for it.
 
 ```ts
 const beat = await tinybird.heartbeat(ctx); // cheap, always available

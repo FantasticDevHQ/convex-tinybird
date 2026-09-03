@@ -5,6 +5,7 @@ import { ConvexError } from "convex/values";
 import workpool from "@convex-dev/workpool/test";
 
 import { api } from "../component/_generated/api";
+import { utf8Length } from "../component/canonical";
 import type { DatabaseWriter } from "../component/_generated/server";
 import type { Doc, Id } from "../component/_generated/dataModel";
 import schema from "../component/schema";
@@ -54,7 +55,12 @@ export async function seedEvent(
   },
 ): Promise<Id<"events">> {
   const { payload = '{"seed":1}', ...event } = fields;
-  const id = await ctx.db.insert("events", { ...event, payloadBytes: payload.length });
+  // `utf8Length`, not `payload.length`: the production path measures UTF-8 bytes, and a
+  // fixture that measured UTF-16 units would quietly disagree the first time one seeds a
+  // non-ASCII payload. Nothing reads this field today, which is exactly why it should be
+  // right — the old inline fixtures had it wrong for both of their payloads and no test
+  // noticed.
+  const id = await ctx.db.insert("events", { ...event, payloadBytes: utf8Length(payload) });
   await ctx.db.insert("payloads", { eventId: id, payload });
   return id;
 }

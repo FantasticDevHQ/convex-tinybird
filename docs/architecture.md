@@ -178,8 +178,15 @@ the one field here that can carry customer data, never reaches an operator surfa
 
 **There is no migration for existing data, and that is a decision rather than an omission.** A
 deployment that already holds events written before this change has them with the payload on the
-`events` row, where nothing now reads it: those events would be stored, counted and reported, and
-would fail to deliver, because `loadForDelivery` returns null when the payload row is missing.
+`events` row, where nothing now reads it. Those events do not fail — they are **stranded**.
+`loadForDelivery` returns null when the payload row is missing, so the delivery action treats the
+event as gone: no request is made, no attempt is spent, and no error is recorded. The row stays
+`pending` with `attempts: 0` forever. Replay cannot reach it, because replay takes only `failed`
+rows, and `resume` re-queues it into the same silent skip. The only signal that moves is
+`oldestPendingAgeMs`, and it carries no reason.
+
+That is worse than a dead letter, and deliberately not fixed here: turning it into one needs a
+failure category the contract does not have. FTD-2531 carries it.
 
 The component is pre-release and unpublished — it has no external consumers and its only host is
 this repository, whose local deployment carries no events worth keeping. Writing and testing a

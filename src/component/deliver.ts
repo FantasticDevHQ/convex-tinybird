@@ -42,7 +42,9 @@ export const deliverEvent = internalAction({
   }),
   handler: async (ctx, { eventId }): Promise<DeliveryOutcome> => {
     const loaded = await ctx.runQuery(internal.lib.loadForDelivery, { eventId });
-    // The event was cleaned up, replayed elsewhere, or already finished.
+    // The event was cleaned up, replayed elsewhere, already finished, or its payload row is
+    // missing. The first three are races and benign; the fourth is a fault, and it is the
+    // one this cannot tell apart — see FTD-2531.
     if (loaded === null || loaded.state === "delivered" || loaded.state === "failed") {
       return { outcome: "skipped" as const };
     }
