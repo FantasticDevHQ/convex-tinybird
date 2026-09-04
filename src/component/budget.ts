@@ -207,31 +207,45 @@ export const DEFAULT_ORPHAN_SCAN_LIMIT = 2;
 export const MAX_ORPHAN_SCAN_LIMIT = 20;
 
 /**
- * How long a row may sit in one state before `requeueStuck` treats it as abandoned.
+ * How long a row may sit in one state before `requeueStuck` will even ASK about it.
  *
- * Ten minutes, and the number is a trade rather than a measurement. Too short and a delivery
- * that is merely slow gets a second work item, which sends the event twice; too long and a
- * crashed delivery sits in `delivering` where nothing retries it, because the state machine
- * has no timer of its own — the Workpool item that would have advanced it died with the
- * process.
+ * A pre-filter, not the criterion. What decides whether a row is abandoned is its Workpool
+ * item: `statusBatch` reports `finished` for an item that completed, was cancelled, or died
+ * with its process, and only then is the row rescued. Age bounds the scan; it does not judge.
  *
- * Ten minutes is comfortably longer than any single request this component makes: the
- * per-call ceiling is {@link REQUEST_TIMEOUT_RANGE_MS}'s maximum, and a full retry chain at
- * the maximum backoff is still well inside it. So a row this old is not slow, it is stranded.
+ * That distinction is the whole correctness argument, and an earlier version got it wrong by
+ * using age as the criterion. Two ways it failed, both measured:
+ *
+ *   `markAttemptFailed` sets `pending` and KEEPS `workId` without refreshing `updatedAt`, so a
+ *   row waiting out Workpool retry backoff is exactly the shape the scan hunts.
+ *   {@link RETRY_LIMITS} permits `initialBackoffMs` of 60 s with `base` 4, so a legal policy
+ *   waits 64 minutes before its fourth attempt — six times this threshold. Verification
+ *   measured four fetches against a `maxAttempts: 2` policy: twice the budget, twice the sends,
+ *   because the old work item is never cancelled and the event ends up with two retry chains.
+ *
+ *   And the DEFAULT configuration reaches it with no backoff at all. `maxParallelism` is 4, so
+ *   a backlog of roughly 160 events puts the tail past ten minutes while every item is queued
+ *   and healthy — and requeueing the tail enqueues more work, lengthening the queue.
+ *
+ * So ten minutes is now only "long enough that asking is cheap and not worth doing sooner".
+ * Being wrong about it costs a wasted status lookup rather than a duplicate delivery.
  */
 export const DEFAULT_STUCK_AFTER_MS = 10 * 60 * 1000;
 
 /**
  * How many rows one `requeueStuck` call rescues, across BOTH scans.
  *
- * Rows here carry no payload — `payloadBytes` lives on the row but the text does not — so the
- * cost is event rows rather than blobs, and it is bounded by the row count in a way the
- * retention sweep could not be. Per rescued row: the index read, `scheduleDelivery`'s own
- * `ctx.db.get`, and its settings read. Against the largest event the contract permits that is
- * about 11 KB, so 100 rows is roughly 1.1 MiB — under 40% of {@link SWEEP_READ_BUDGET_BYTES}
- * and well inside the per-call limit.
+ * Rows here carry no payload text, so the cost is event rows rather than blobs. Per page:
+ * `take(limit + 1)` from the index, ONE batched `pool.statusBatch` for the rows that have a
+ * pointer, and then per rescued row `scheduleDelivery`'s own `ctx.db.get` plus its settings
+ * read. Against the largest event the contract permits that is roughly 11 KB per row, so 100
+ * rows is about 1.1 MiB — well under {@link SWEEP_READ_BUDGET_BYTES}.
  *
- * Matched to `DEFAULT_RESUME_LIMIT` deliberately: both put waiting work back on the pool, and
- * a host that has sized its cron for one has sized it for the other.
+ * The status lookup is batched deliberately. One call per row would put a component call
+ * inside the loop, and a per-row cost that nobody counted is the defect this package has
+ * produced most often.
+ *
+ * Matched to `DEFAULT_RESUME_LIMIT`: both put waiting work back on the pool, so a host that
+ * has sized its cron for one has sized it for the other.
  */
 export const DEFAULT_STUCK_LIMIT = 100;

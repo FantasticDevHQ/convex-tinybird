@@ -32,10 +32,18 @@ the row looks healthy in `getStatus`, counts as unfinished in `health`, and drai
 `requeueStuck` finds it with the mirror of that query — `gt("workId", undefined)` — and clears
 the pointer so `resume` can reach it too.
 
-The threshold is what separates a stranded row from a slow one, and it is a trade rather than a
-measurement. Too short and a delivery that is merely slow is handed a second work item, which
-sends the event twice and gives it a second retry budget; too long and a crashed delivery sits
-untouched. Ten minutes is comfortably longer than any single request this component makes.
+**What separates a stranded row from a slow one is the Workpool item, not the clock.**
+`statusBatch` reports `finished` for an item that completed, was cancelled, or died with its
+process; anything else means the work is still coming and the row must be left alone. Age only
+decides which rows are worth asking about.
+
+Using age as the criterion is the obvious design and it is wrong twice over. `markAttemptFailed`
+sets `pending` and keeps `workId` without refreshing `updatedAt`, so a row waiting out retry
+backoff looks identical to a stranded one — and a legal retry policy waits 64 minutes before its
+fourth attempt, six times any sensible threshold. Separately, `maxParallelism` is 4, so a backlog
+of a few hundred events puts the tail past any threshold while every item is queued and healthy.
+In both cases requeueing hands the event a second work item and therefore a second retry budget,
+sends it twice, and — in the backlog case — lengthens the queue it was trying to drain.
 
 **This is where at-least-once is paid for.** An event Tinybird accepted whose acknowledgement
 never reached us is _indistinguishable_ from one that was never sent — the row looks identical

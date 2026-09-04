@@ -1,4 +1,4 @@
-import { Workpool } from "@convex-dev/workpool";
+import { Workpool, type WorkId } from "@convex-dev/workpool";
 
 import { components } from "./_generated/api";
 
@@ -17,3 +17,6 @@ export const pool = new Workpool(components.workpool, {
   maxParallelism: 4,
   retryActionsByDefault: false,
 });
+
+/** Re-exported so callers can type a stored `workId` without importing the pool package. */
+export type { WorkId };
