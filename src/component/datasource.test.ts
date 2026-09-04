@@ -1,17 +1,28 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson } from "./canonical";
-
 /**
- * Ties the component's output to the example datasource's columns.
+ * Pins the invariants of the reference datasource in `tinybird/`.
  *
- * These two live in different languages and different directories, so nothing else notices when
- * they drift: a renamed column in the `.datasource` file, or a payload the component canonicalises
- * differently, would be found by Tinybird quarantining rows in production and nowhere earlier.
+ * It does NOT tie the component's output to these columns, and an earlier version of this
+ * docstring claimed that it did. The component sends the host's `payload` object verbatim as one
+ * canonical NDJSON line — it constructs no columns of its own — so "the component's output" is
+ * whatever the host passes, and the example passes `{order_id, sku, quantity}`, which is not this
+ * schema at all. The two are independent: `tinybird/` is a reference a host can copy, the example
+ * is a different stream that never reaches it.
  *
- * This asserts the SHAPE agrees, not that a request succeeds — that is `tinybird/smoke.sh`, which
- * needs Docker and does not run in CI.
+ * The old first test made the false claim look checked. It built a row literal BY HAND to match
+ * these columns and asserted its keys were declared here — but `canonicalJson` only sorts keys,
+ * so `Object.keys(JSON.parse(canonicalJson(literal)))` is just the literal's own key names. It
+ * compared a hand-typed list against the file, with the component nowhere in the loop; swapping
+ * `canonicalJson` for `JSON.stringify` left it green. Every mutant it appeared to kill was killed
+ * by the key-name list.
+ *
+ * So what is left is what is actually true and worth holding: the one column the component
+ * requires exists and has the type it needs, and the columns a minimal sender omits still carry
+ * their defaults. Both are properties of this file, which is what this test can see.
+ *
+ * Whether a request SUCCEEDS is `tinybird/smoke.sh`, which needs Docker and does not run in CI.
  */
 const datasource = readFileSync(
   new URL("../../tinybird/datasources/events.datasource", import.meta.url),
@@ -25,32 +36,23 @@ function declaredColumns(): string[] {
   return [...(schema?.[1] ?? "").matchAll(/^\s*`(\w+)`/gmu)].map((match) => match[1]);
 }
 
-describe("what the component sends matches what the datasource declares", () => {
-  it("produces a row whose keys are all declared columns", () => {
-    const columns = declaredColumns();
-    // Non-empty by assertion: a regex that silently matched nothing would make every check
-    // below vacuously true.
-    expect(columns.length).toBeGreaterThan(4);
-
-    const row = JSON.parse(
-      canonicalJson({
-        event_id: "evt_1",
-        event_type: "order_created",
-        occurred_at: "2026-09-05 10:00:00.000",
-        version: 1,
-        payload: JSON.stringify({ sku: "SKU-1" }),
-      }),
-    ) as Record<string, unknown>;
-
-    for (const key of Object.keys(row)) {
-      expect(columns).toContain(key);
-    }
-  });
-
-  it("declares event_id, which is the one column the component requires", () => {
+describe("the reference datasource keeps the guarantees the component depends on", () => {
+  it("declares event_id as a String, which is the one column the component requires", () => {
     // The component's only demand on the host's schema. Everything else here is the host's
     // choice, and this is the line that stops a rename from being a silent contract break.
     expect(declaredColumns()).toContain("event_id");
+
+    // The TYPE, not just the name. Convex ids are strings, so a schema declaring `event_id` as
+    // anything numeric quarantines every row the component sends — and presence alone could not
+    // see that: changing `String` to `UInt64` here left the previous version of this file green.
+    expect(datasource).toMatch(/`event_id`\s+String/u);
+  });
+
+  it("declares occurred_at with sub-second precision", () => {
+    // `DateTime` instead of `DateTime64(3)` truncates to whole seconds, which silently collapses
+    // the ordering of events enqueued in the same second rather than failing. Also invisible to
+    // a name-only check.
+    expect(datasource).toMatch(/`occurred_at`\s+DateTime64\(3/u);
   });
 
   it("declares the columns the datasource can default, so a minimal row is still valid", () => {

@@ -44,35 +44,53 @@ echo "==> deploying the datasource and pipe"
 # looks like a broken script rather than the wrong verb.
 tb --host "http://localhost:${PORT}" --token "$TOKEN" deploy
 
+# One row count off the deployed table. Used by the poll and by the control assertion, so both
+# ask the storage layer the same question the same way.
+raw_count() {
+  tb --host "http://localhost:${PORT}" --token "$TOKEN" \
+    sql "SELECT count() AS raw FROM events" 2>/dev/null \
+    | grep -oE '^\s+[0-9]+\s*$' | tr -d ' ' | head -1
+}
+
 echo "==> sending the SAME event three times"
 ROW='{"event_id":"evt_smoke_1","event_type":"order_created","occurred_at":"2026-09-05 10:00:00.000","version":1,"payload":"{\"sku\":\"SKU-1\"}"}'
 for _ in 1 2 3; do
   curl -fsS -X POST "http://localhost:${PORT}/v0/events?name=events" \
     -H "Authorization: Bearer ${TOKEN}" -d "$ROW" >/dev/null
 done
-sleep 2
+
+# Wait for the value we expect rather than for a duration. `sleep 2` read a PARTIALLY INGESTED
+# table and saw 2 rows, which was then written up as background merges collapsing a duplicate.
+# It was not: waiting LONGER makes the number go UP (measured — 2s gives 2, 30s gives 3), and no
+# merge can do that. The two look identical in a single sample and are told apart by direction,
+# so poll for 3 instead of guessing a duration, and let the deadline be the thing that reports.
+DEADLINE=$((SECONDS + 60))
+while :; do
+  RAW="$(raw_count)"
+  [ "${RAW:-0}" -ge 3 ] && break
+  [ "$SECONDS" -ge "$DEADLINE" ] && break
+  sleep 1
+done
 
 echo "==> querying the pipe"
 COUNT="$(curl -fsS "http://localhost:${PORT}/v0/pipes/events_by_type.json" \
   -H "Authorization: Bearer ${TOKEN}" \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(r["events"] for r in d["data"]))')"
 
-# The CONTROL, and the reason this script is evidence rather than a green light. If background
-# merges had already collapsed the duplicates, the pipe would return 1 whether or not it said
-# FINAL — so the raw count is read too. Three raw rows collapsing to one only at read time is
-# what proves the pipe, not the engine's timing, is doing the work.
-RAW="$(tb --host "http://localhost:${PORT}" --token "$TOKEN" \
-  sql "SELECT count() AS raw FROM events" 2>/dev/null | grep -oE '^\s+[0-9]+\s*$' | tr -d ' ' | head -1)"
-
 echo "sent 3, raw rows ${RAW}, pipe counted ${COUNT}"
-# At least two, not exactly three. Background merges run on their own schedule and this script
-# has already seen them collapse 3 to 2 between the sends and the query — which is the engine
-# working, not a failure. What must hold is that duplicates were PHYSICALLY STORED and the pipe
-# still counted one; if merges got all the way to 1 first, the run proves nothing and says so
-# rather than reporting a pass it did not earn.
-if [ "${RAW:-0}" -lt 2 ]; then
-  echo "INCONCLUSIVE: raw rows ${RAW} — merges collapsed everything before the read, so FINAL" >&2
-  echo "was not exercised. Re-run; this is timing, not a defect." >&2
+# The CONTROL, and the reason this script is evidence rather than a green light. If the engine
+# had already collapsed the duplicates on disk, the pipe would return 1 whether or not it said
+# FINAL. Reading the raw count is what makes the pass mean something: three rows PHYSICALLY
+# STORED and one row returned can only be read-time dedupe.
+#
+# Exactly 3, not "at least 2". The looser bound was never needed — it was added to accommodate a
+# 2 that came from reading too early, not from merges. With the poll above, anything short of 3
+# is either a merge that beat us or an ingest that never landed, and neither exercises FINAL, so
+# neither should be reported as a pass.
+if [ "${RAW:-0}" -ne 3 ]; then
+  echo "INCONCLUSIVE: raw rows ${RAW}, expected 3 — either ingest never landed within 60s or a" >&2
+  echo "merge collapsed the duplicates first. FINAL was not exercised, so this run proves" >&2
+  echo "nothing. Re-run; this is timing, not a defect." >&2
   exit 1
 fi
 if [ "$COUNT" != "1" ]; then
