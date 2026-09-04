@@ -131,13 +131,13 @@ had assumed.
 Most of that gap is one thing. Every length cap here counts UTF-16 code units while Convex sizes a
 string by its UTF-8 bytes, so the most expensive string a cap admits is not ASCII: a BMP character
 outside Latin-1 is one unit and three bytes, the worst ratio available. Filled with ASCII the same
-row measures 2458 bytes; filled truthfully it measures 5412. Bounding those strings in bytes would
+row measures 2458 bytes; filled truthfully it measures 5459. Bounding those strings in bytes would
 let the cap rise again, which is FTD-2600.
 
 `health` counts three states and reads one row past the cap in each, so the worst call is
 `(3 x (cap + 1) + 2) x 5.4 KB` — the two being `readHeartbeat`'s settings row and oldest waiting
 event. At the old cap of 1000 that was 15.5 MiB, **nearly twice the ~8 MiB budget**; at 150 it is
-2.35 MiB, 29.4%.
+2.37 MiB, 29.7%.
 
 That shape is not hypothetical: a sustained outage produces exactly that many failed rows each
 carrying a full history, so the worst case and the case an operator reaches for `health` in are
@@ -244,6 +244,28 @@ prerequisite rather than a note.
 The `payload_missing` dead letter is therefore not justified by migration. It exists because
 something can delete one of the two rows without the other, and retention — FTD-2502 — is the
 first thing that will delete anything at all.
+
+## Retention
+
+`cleanup` walks `by_state_createdAt` for `delivered` and then for `failed`, each with its own
+cutoff, and deletes a bounded batch. `pending` and `delivering` are never queried — not queried
+and filtered, which is the difference between a rule and a comment. A row exactly at the cutoff
+is kept: the comparison is `lt`, because deleting on equality would quietly shorten every
+retention by one tick.
+
+Each deletion removes the event and its payload row together. The event carries `payloadId`
+precisely so this costs nothing to find: `ctx.db.delete(id)` reads no document, where looking
+the row up through `by_event` would return the payload text and put the sweep's cost back on
+event size — at the default 64 KiB bound a batch of 200 would read 12.9 MiB against a limit near
+8, which is the coupling the payload split removed. The index lookup survives only as a fallback
+for a row whose pointer was never recorded, because leaking a payload is worse than paying for
+one read.
+
+**The dedupe window equals the delivered retention.** The delivered row IS the dedupe record, so
+removing it makes the same identity a new event. That is a deliberate trade rather than an
+oversight: keeping every delivered row forever would make the table grow without bound, and
+Tinybird-side dedupe on `event_id` is what covers a producer that re-emits something older than
+the window.
 
 ## Operator controls are mount-wide
 

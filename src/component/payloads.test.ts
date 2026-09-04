@@ -287,10 +287,24 @@ describe("the payload lives outside the counted row", () => {
       }),
     );
 
-    // Two in `lib.ts`: the dedupe comparison in `enqueue`, and `loadForDelivery`.
-    expect(reads["lib.ts"]).toBe(2);
+    // Three reads, each one justified, and the whole point is that there are no others.
+    //
+    // `lib.ts` — the duplicate comparison in `enqueue`, which needs the canonical text to
+    // tell a duplicate from a conflict. `lifecycle.ts` — `loadForDelivery`, which needs it
+    // to send. Both run once per event, not once per paged read.
+    //
+    // `state.ts` is the deliberate exception. Retention deletes a payload by the id its
+    // event carries, which reads nothing; the index lookup is the fallback for a row whose
+    // pointer was never recorded, because leaking a payload is worse than paying for one
+    // read, and it is bounded to rows that should not exist in the first place.
+    expect(reads).toMatchObject({ "lib.ts": 1, "lifecycle.ts": 1, "state.ts": 1 });
+
     // Nowhere else, whatever else the component grows. Reported by name so a failure says
-    // which file gained a consumer rather than only that the count moved.
-    expect(Object.keys(reads).filter((name) => name !== "lib.ts" && reads[name] > 0)).toEqual([]);
+    // which file gained a consumer rather than only that a count moved.
+    const justified = ["lib.ts", "lifecycle.ts", "state.ts"];
+    const unexpected = Object.keys(reads).filter(
+      (name) => !justified.includes(name) && reads[name] > 0,
+    );
+    expect(unexpected).toEqual([]);
   });
 });

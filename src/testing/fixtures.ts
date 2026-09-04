@@ -65,7 +65,10 @@ export async function seedEvent(
     payloadBytes: utf8Length(payload),
     payloadHash: payloadFingerprint(payload),
   });
-  await ctx.db.insert("payloads", { eventId: id, payload });
+  const payloadId = await ctx.db.insert("payloads", { eventId: id, payload });
+  // Patched exactly as `enqueue` does. Omitting it would build a row no real path produces,
+  // and would quietly understate the size measurement that reads this helper.
+  await ctx.db.patch(id, { payloadId });
   return id;
 }
 

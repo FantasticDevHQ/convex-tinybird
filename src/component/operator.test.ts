@@ -313,7 +313,7 @@ describe("marking a pause", () => {
     const before = await statusOf(t);
     const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
 
-    await t.mutation(internal.lib.markPaused, {
+    await t.mutation(internal.lifecycle.markPaused, {
       eventId,
       reason: "unauthorized",
       error: { category: "unauthorized", message: "refused", at: Date.now() },

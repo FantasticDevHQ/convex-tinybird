@@ -178,7 +178,7 @@ describe("terminal states are final", () => {
     expect(before).toMatchObject({ state: "failed" });
 
     const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
-    await t.mutation(internal.lib.markDelivered, { eventId });
+    await t.mutation(internal.lifecycle.markDelivered, { eventId });
 
     expect(await statusOf(t)).toMatchObject({ state: "failed" });
     expect((await statusOf(t))?.deliveredAt).toBeUndefined();
@@ -194,7 +194,7 @@ describe("terminal states are final", () => {
     await drain(t);
 
     const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
-    await t.mutation(internal.lib.markFailed, {
+    await t.mutation(internal.lifecycle.markFailed, {
       eventId,
       error: { category: "invalid_request", message: "late", at: Date.now() },
     });
@@ -257,8 +257,8 @@ describe("claiming an event", () => {
     await enqueueOne(t);
     const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
 
-    expect(await t.mutation(internal.lib.markDelivering, { eventId })).toBe(true);
-    expect(await t.mutation(internal.lib.markDelivering, { eventId })).toBe(false);
+    expect(await t.mutation(internal.lifecycle.markDelivering, { eventId })).toBe(true);
+    expect(await t.mutation(internal.lifecycle.markDelivering, { eventId })).toBe(false);
 
     // The refused claim must not have counted as an attempt.
     expect(await statusOf(t)).toMatchObject({ state: "delivering", attempts: 1 });
@@ -274,7 +274,7 @@ describe("claiming an event", () => {
     await drain(t);
     const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
 
-    expect(await t.mutation(internal.lib.markDelivering, { eventId })).toBe(false);
+    expect(await t.mutation(internal.lifecycle.markDelivering, { eventId })).toBe(false);
     expect(await statusOf(t)).toMatchObject({ state: "delivered", attempts: 1 });
   });
 });
@@ -291,7 +291,7 @@ describe("the pool's verdict", () => {
     const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
 
     // A late failure verdict for work whose action already confirmed the write.
-    await t.mutation(internal.lib.onDeliveryComplete, {
+    await t.mutation(internal.lifecycle.onDeliveryComplete, {
       workId: "late-work-id" as WorkId,
       context: { eventId },
       result: { kind: "failed", error: "pool gave up" },
@@ -306,13 +306,13 @@ describe("the pool's verdict", () => {
     const t = setup("");
     await enqueueOne(t);
     const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
-    await t.mutation(internal.lib.markDelivering, { eventId });
+    await t.mutation(internal.lifecycle.markDelivering, { eventId });
     // The row holds the item being cancelled, which is what scheduling would have left. A
     // `delivering` row with no work item at all cannot occur in production — nothing
     // schedules on an unconfigured instance, so no completion would ever arrive for it.
     await t.run(async (ctx) => ctx.db.patch(eventId, { workId: "canceled-work-id" }));
 
-    await t.mutation(internal.lib.onDeliveryComplete, {
+    await t.mutation(internal.lifecycle.onDeliveryComplete, {
       workId: "canceled-work-id" as WorkId,
       context: { eventId },
       result: { kind: "canceled" },
@@ -335,10 +335,10 @@ describe("the pool's verdict", () => {
     const t = setup("");
     await enqueueOne(t);
     const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
-    await t.mutation(internal.lib.markDelivering, { eventId });
+    await t.mutation(internal.lifecycle.markDelivering, { eventId });
     await t.run(async (ctx) => ctx.db.patch(eventId, { workId: "the-current-item" }));
 
-    await t.mutation(internal.lib.onDeliveryComplete, {
+    await t.mutation(internal.lifecycle.onDeliveryComplete, {
       workId: "an-earlier-item" as WorkId,
       context: { eventId },
       result: { kind: "canceled" },
@@ -522,7 +522,7 @@ describe("recording an attempt", () => {
     const before = await statusOf(t);
     const eventId = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
 
-    await t.mutation(internal.lib.markAttemptFailed, {
+    await t.mutation(internal.lifecycle.markAttemptFailed, {
       eventId,
       error: { category: "server_error", message: "late attempt report", at: Date.now() },
     });

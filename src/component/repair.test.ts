@@ -251,7 +251,7 @@ describe("repairing a lost payload", () => {
     const t = setup("");
     await enqueueOne(t);
     const id = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
-    await t.mutation(internal.lib.markDelivering, { eventId: id });
+    await t.mutation(internal.lifecycle.markDelivering, { eventId: id });
     await t.run(async (ctx) => {
       const stored = await ctx.db.query("payloads").first();
       await ctx.db.delete(stored!._id);

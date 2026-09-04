@@ -31,6 +31,20 @@ export const events = defineTable({
    * same length as the value it replaced.
    */
   payloadHash: v.string(),
+  /**
+   * The row in `payloads` holding this event's body.
+   *
+   * Optional only because it cannot be known at insert time: the payload row keys itself by
+   * the event, so the event must exist first. `enqueue` patches it in the same mutation, so
+   * no committed row is ever without it.
+   *
+   * It exists so a retention sweep can delete the payload with `ctx.db.delete(id)`, which
+   * reads nothing. Finding it through the `by_event` index instead would return the whole
+   * document — payload text included — and put the sweep's cost back on the payload size,
+   * which is the coupling FTD-2525 removed: at the default 64 KiB bound a batch of 200 would
+   * read 12.9 MiB against a limit near 8.
+   */
+  payloadId: v.optional(v.id("payloads")),
   state: vEventState,
   attempts: v.number(),
   createdAt: v.number(),

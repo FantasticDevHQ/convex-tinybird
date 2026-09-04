@@ -15,9 +15,9 @@ This package is being built in layers, and this README describes only what is ac
   `getStatus`, the `health` query, delivery of one event per request to the Events API, retrying
   a transient failure until the budget is spent, and pausing the destination when Tinybird
   refuses the credential, with `pause` and `resume` for operators, and replay of dead letters
-  with an operator audit trail.
-- **Not implemented yet:** retention cleanup, requeueing events stuck in delivery, and
-  datasource-scoped operator controls.
+  with an operator audit trail, and bounded retention cleanup.
+- **Not implemented yet:** requeueing events stuck in delivery, and datasource-scoped
+  operator controls.
 
 `TINYBIRD_HOST` is validated before any request: it must be a bare `https` origin with no path,
 query, fragment or embedded credentials, the one exception being a loopback address for Tinybird
@@ -142,6 +142,47 @@ do {
 would give it a second retry budget and let it be sent more times than its policy allows. That is
 also what makes the loop above terminate: each call schedules what it picks up, so the next call
 finds nothing left to do.
+
+## Retention
+
+Finished events are kept for a while and then removed. `cleanup` deletes `delivered` rows past
+seven days and `failed` rows past thirty, in bounded batches, and never touches an event that is
+still `pending` or `delivering` however old it is — age is not a reason to discard work nobody
+has finished.
+
+The component owns no cron. Schedule it from yours:
+
+```ts
+// convex/crons.ts
+crons.daily("tinybird retention", { hourUTC: 4, minuteUTC: 0 }, internal.tinybird.sweep);
+
+// convex/tinybird.ts
+export const sweep = internalMutation({
+  handler: async (ctx) => {
+    // Bounded, like every loop against this component. Ten passes at the default limit is
+    // 2000 rows per state.
+    for (let pass = 0; pass < 10; pass += 1) {
+      const { remaining } = await tinybird.cleanup(ctx);
+      if (!remaining) break;
+    }
+  },
+});
+```
+
+**The dedupe window IS the delivered retention.** Identity is `(datasource, eventId)`, and a
+delivered row is what makes a repeat enqueue a `duplicate`. Once retention removes that row the
+same identity is a new event again and will be sent a second time. Seven days is the default
+because that is a long time to be retrying something; if your producer can re-emit an event
+older than that, either raise `deliveredRetentionMs` or rely on Tinybird-side dedupe by
+`event_id`, which is what the example datasource's `ReplacingMergeTree` is for.
+
+`failed` rows are kept longer, at thirty days, for a different reason: a delivered row only
+answers "have I sent this", while a dead letter is something an operator may still act on, and
+the window to notice one is measured in weeks.
+
+Deleting an event deletes its payload row in the same transaction. Neither table is left with an
+orphan — a stranded payload would be invisible, since the whole point of keeping payloads out of
+the counted table is that nothing counts them.
 
 ## Replaying dead letters
 

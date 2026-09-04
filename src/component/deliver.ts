@@ -41,7 +41,7 @@ export const deliverEvent = internalAction({
     ),
   }),
   handler: async (ctx, { eventId }): Promise<DeliveryOutcome> => {
-    const loaded = await ctx.runQuery(internal.lib.loadForDelivery, { eventId });
+    const loaded = await ctx.runQuery(internal.lifecycle.loadForDelivery, { eventId });
     // The event was cleaned up, replayed elsewhere, or already finished. All races, all
     // benign, and none of them records anything.
     if (loaded === null || loaded.state === "delivered" || loaded.state === "failed") {
@@ -52,7 +52,7 @@ export const deliverEvent = internalAction({
     // it becomes a dead letter an operator can find and replay rather than a `pending` row
     // that nothing will ever pick up. Recorded before the claim, so it costs no attempt.
     if (loaded.payload === undefined) {
-      await ctx.runMutation(internal.lib.markFailed, {
+      await ctx.runMutation(internal.lifecycle.markFailed, {
         eventId,
         error: {
           category: "payload_missing" as const,
@@ -72,7 +72,7 @@ export const deliverEvent = internalAction({
     // delivery attempt, and it must not consume the event's budget or leave it in flight.
     const destination = resolveDestination(env.TINYBIRD_HOST);
     if (!destination.ok) {
-      await ctx.runMutation(internal.lib.markPaused, {
+      await ctx.runMutation(internal.lifecycle.markPaused, {
         eventId,
         reason: "invalid_host",
         error: { category: "invalid_request", message: destination.reason, at: Date.now() },
@@ -80,7 +80,7 @@ export const deliverEvent = internalAction({
       return { outcome: "paused" as const };
     }
 
-    const claimed = await ctx.runMutation(internal.lib.markDelivering, { eventId });
+    const claimed = await ctx.runMutation(internal.lifecycle.markDelivering, { eventId });
     if (!claimed) return { outcome: "skipped" as const };
 
     try {
@@ -93,7 +93,7 @@ export const deliverEvent = internalAction({
       });
     } catch (error) {
       // The claim must not outlive the attempt: a retry has to be able to claim it again.
-      await ctx.runMutation(internal.lib.releaseForRetry, { eventId });
+      await ctx.runMutation(internal.lifecycle.releaseForRetry, { eventId });
       throw error;
     }
   },
@@ -135,7 +135,7 @@ async function attemptDelivery(
       // URL, and this string is persisted on the row and surfaced by `health`. The original
       // is attached as `cause`, which stays in the deployment log rather than a public API.
       const name = (error as Error).name;
-      await ctx.runMutation(internal.lib.markAttemptFailed, {
+      await ctx.runMutation(internal.lifecycle.markAttemptFailed, {
         eventId,
         error: {
           category: transportCategory(name),
@@ -151,11 +151,11 @@ async function attemptDelivery(
     const classified = classifyResponse(response.status, await readJson(response));
 
     if (classified.kind === "delivered") {
-      await ctx.runMutation(internal.lib.markDelivered, { eventId });
+      await ctx.runMutation(internal.lifecycle.markDelivered, { eventId });
       return { outcome: "delivered" as const };
     }
     if (classified.kind === "failed") {
-      await ctx.runMutation(internal.lib.markFailed, {
+      await ctx.runMutation(internal.lifecycle.markFailed, {
         eventId,
         error: {
           category: classified.category,
@@ -171,7 +171,7 @@ async function attemptDelivery(
     // a time. Pause the destination, keep the event, and return without throwing so the
     // pool records success and schedules nothing further.
     if (classified.category === "unauthorized") {
-      await ctx.runMutation(internal.lib.markPaused, {
+      await ctx.runMutation(internal.lifecycle.markPaused, {
         eventId,
         reason: "unauthorized",
         error: {
@@ -186,7 +186,7 @@ async function attemptDelivery(
 
     // Retryable: record the attempt, then fail it so the pool applies the retry policy.
     // Running out of attempts is what turns this into a dead letter, in onDeliveryComplete.
-    await ctx.runMutation(internal.lib.markAttemptFailed, {
+    await ctx.runMutation(internal.lifecycle.markAttemptFailed, {
       eventId,
       error: {
         category: classified.category,

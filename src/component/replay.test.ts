@@ -465,7 +465,7 @@ it("ignores a completion for a work item the event no longer holds", async () =>
   // alone does not distinguish them. What pins the verdict half — which was the live defect —
   // is `ignores a cancellation for a work item the event no longer holds` in deliver.test.ts.
   // Weakening that one silently unpins this fix.
-  await t.mutation(internal.lib.onDeliveryComplete, {
+  await t.mutation(internal.lifecycle.onDeliveryComplete, {
     context: { eventId: live.id! },
     workId: "an_earlier_work_item" as never,
     result: { kind: "success", returnValue: null },

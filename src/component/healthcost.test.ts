@@ -33,7 +33,7 @@ const BUDGET_SHARE = 0.35;
  * combination of cap and row against the number the docblock publishes, so either moving
  * has to come here.
  */
-const DOCUMENTED_SHARE = 0.294;
+const DOCUMENTED_SHARE = 0.297;
 const SHARE_TOLERANCE = 0.002;
 
 /**
@@ -62,7 +62,7 @@ const SHARE_TOLERANCE = 0.002;
  * bound change, which is the failure the ratchet exists to catch, and at 0.5% one would
  * still have absorbed the 42 bytes of unmaximal fields verification found.
  */
-const WORST_CASE_ROW_BYTES = 5412;
+const WORST_CASE_ROW_BYTES = 5459;
 
 /**
  * The only variation the measurement can legitimately show: `_creationTime` rendering as a
@@ -160,6 +160,7 @@ async function measureWorstCaseRow(): Promise<number> {
 
   // The optional fields too: a maximal row has all of them, and deleting any one shrinks it
   // while every assertion above stays true.
+  expect(row?.payloadId).toBeDefined();
   expect(row?.workId).toBeDefined();
   expect(row?.retry).toBeDefined();
   expect(row?.requestTimeoutMs).toBeDefined();

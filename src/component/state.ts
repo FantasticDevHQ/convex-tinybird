@@ -141,7 +141,7 @@ export async function scheduleDelivery(ctx: MutationCtx, id: Id<"events">): Prom
     { eventId: id },
     {
       retry: event.retry ?? false,
-      onComplete: internal.lib.onDeliveryComplete,
+      onComplete: internal.lifecycle.onDeliveryComplete,
       context: { eventId: id },
     },
   );
@@ -221,7 +221,13 @@ export async function resolveExistingIdentity(
   // `enqueue` is the sole surface that writes `payloads`, and a component's tables are
   // unreachable from the host, so rejecting it would leave the row stuck permanently:
   // selected by replay, never deliverable, never countable down.
-  await ctx.db.insert("payloads", { eventId: existing._id, payload: incoming.payload });
+  const payloadId = await ctx.db.insert("payloads", {
+    eventId: existing._id,
+    payload: incoming.payload,
+  });
+  // A repaired event gets its pointer back too, or the sweep would lose track of the row it
+  // just restored and leak it.
+  await ctx.db.patch(existing._id, { payloadId });
 
   // Requeued ONLY when nothing is already working on it. `requeueDeadLetter` schedules
   // unconditionally, and giving a row a second work item while the first is queued makes its
@@ -249,4 +255,56 @@ export async function resolveExistingIdentity(
     eventId: existing.eventId,
     state: repaired?.state ?? existing.state,
   };
+}
+
+/**
+ * Deletes one event and the payload row it points at.
+ *
+ * The pointer is the whole reason this is cheap: `ctx.db.delete(id)` reads nothing, where
+ * finding the row through `by_event` would return the payload text and put the sweep's cost
+ * back on event size. The index lookup survives only as a fallback for a row whose pointer
+ * was never recorded — a half-written path, or data predating the field — because leaking
+ * the payload would be worse than paying for one read.
+ */
+export async function deleteEventWithPayload(
+  ctx: MutationCtx,
+  event: Doc<"events">,
+): Promise<void> {
+  if (event.payloadId !== undefined) {
+    await ctx.db.delete(event.payloadId);
+  } else {
+    const stored = await ctx.db
+      .query("payloads")
+      .withIndex("by_event", (q) => q.eq("eventId", event._id))
+      .unique();
+    if (stored !== null) await ctx.db.delete(stored._id);
+  }
+  await ctx.db.delete(event._id);
+}
+
+/**
+ * Deletes one bounded page of finished events past a cutoff, with their payloads.
+ *
+ * Only ever called for `delivered` and `failed`. `pending` and `delivering` are not filtered
+ * out here — they are never queried at all, which is the difference between a rule and a
+ * comment, and it is why this takes the state rather than deciding it.
+ *
+ * The cutoff is strict: a row exactly at it is kept. Deleting on equality would quietly
+ * shorten every retention by one tick.
+ */
+export async function sweepExpired(
+  ctx: MutationCtx,
+  state: "delivered" | "failed",
+  cutoff: number,
+  batch: number,
+): Promise<{ deleted: number; more: boolean }> {
+  // One row past the batch, so "is there more" is answered by the same read rather than by
+  // a second query that could disagree with it.
+  const found = await ctx.db
+    .query("events")
+    .withIndex("by_state_createdAt", (q) => q.eq("state", state).lt("createdAt", cutoff))
+    .take(batch + 1);
+  const selected = found.slice(0, batch);
+  for (const event of selected) await deleteEventWithPayload(ctx, event);
+  return { deleted: selected.length, more: found.length > selected.length };
 }

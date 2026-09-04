@@ -163,6 +163,27 @@ export class TinybirdDelivery {
     return ctx.runMutation(this.component.lib.replayFailed, args);
   }
 
+  /**
+   * Delete finished events past their retention, a bounded batch at a time.
+   *
+   * Only `delivered` and `failed` rows are ever considered; work still in flight is never
+   * removed however old it is. Loop while `remaining` is true, and bound that loop — this
+   * is a sweep, not a drain.
+   *
+   * The dedupe window IS the delivered retention: once a delivered row is gone, the same
+   * identity is a new event again. Tinybird-side dedupe on `event_id` covers the rest.
+   */
+  async cleanup(
+    ctx: RunMutationCtx,
+    args: {
+      deliveredRetentionMs?: number;
+      failedRetentionMs?: number;
+      limit?: number;
+    } = {},
+  ): Promise<{ deletedDelivered: number; deletedFailed: number; remaining: boolean }> {
+    return ctx.runMutation(this.component.lib.cleanup, args);
+  }
+
   /** Replay one dead letter by its identity. */
   async replayEvent(
     ctx: RunMutationCtx,

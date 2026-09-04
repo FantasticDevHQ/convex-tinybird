@@ -78,6 +78,32 @@ export function boundedBatch(limit: number | undefined, fallback: number, max: n
 /** How many waiting events one `resume` call puts back to work. */
 export const DEFAULT_RESUME_LIMIT = 100;
 
+/** How long a `delivered` row is kept before retention may remove it. */
+export const DEFAULT_DELIVERED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * How long a `failed` row is kept.
+ *
+ * Longer than delivered on purpose: a delivered row exists only to answer "have I sent this
+ * already", while a dead letter is something an operator may still act on, and the window to
+ * notice one is measured in weeks rather than days.
+ */
+export const DEFAULT_FAILED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * How many rows one `cleanup` call removes, per state, by default.
+ *
+ * Deleting a row costs one read of the event and one write; the payload is deleted by id and
+ * read not at all, which is why `payloadId` exists. So a batch of `n` is about `n x 5.4 KB`
+ * against Convex's roughly 8 MiB per-call limit — 200 rows is near 1.1 MiB per state, and the
+ * two states together stay comfortably inside it.
+ *
+ * Reading the payload back to find it would put the cost on the payload size instead, which
+ * is the coupling FTD-2525 removed: 200 rows at the default 64 KiB bound would be 12.9 MiB
+ * and the call would throw.
+ */
+export const DEFAULT_CLEANUP_LIMIT = 200;
+
 /** How many earlier failures an event keeps alongside its newest one. */
 export const MAX_ERROR_HISTORY = 5;
 
@@ -92,14 +118,14 @@ export const MAX_ERROR_HISTORY = 5;
  * event, the latter being the same document the pending count reads first, which Convex
  * charges twice because it accumulates per read rather than per document. So the worst call
  * is `(3 x (cap + 1) + 2) x 5.4 KB` against Convex's roughly 8 MiB per-call budget.
- * `healthcost.test.ts` pins the 29.4% figure below as well as the row size, so raising the
+ * `healthcost.test.ts` pins the 29.7% figure below as well as the row size, so raising the
  * cap has to come here even while it would still be safe:
  *
  * | cap | worst call | share of budget |
  * |---|---|---|
- * | 1000 | 15.51 MiB | 193.9% |
- * | 250 | 3.90 MiB | 48.7% |
- * | 150 | 2.35 MiB | 29.4% |
+ * | 1000 | 15.65 MiB | 195.6% |
+ * | 250 | 3.93 MiB | 49.1% |
+ * | 150 | 2.37 MiB | 29.7% |
  *
  * That shape is a UNION of every field's maximum, deliberately including combinations the
  * state machine cannot produce — `deliveredAt` is only ever written alongside
@@ -113,7 +139,7 @@ export const MAX_ERROR_HISTORY = 5;
  * code units while Convex sizes a string by its UTF-8 bytes, so the most expensive string a
  * cap admits is not ASCII — a BMP character outside Latin-1 is one unit and three bytes, the
  * worst ratio available. An ASCII fixture measures 2458 bytes for this row and a truthful
- * one measures 5412, which is most of the gap against the 2.1 KB the ticket had estimated.
+ * one measures 5459, which is most of the gap against the 2.1 KB the ticket had estimated.
  * Capping those strings in bytes instead would let this constant rise again; that is
  * FTD-2600.
  *
