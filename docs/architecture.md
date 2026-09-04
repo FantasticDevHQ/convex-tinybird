@@ -28,6 +28,14 @@ built in on every table, so this costs no schema change.
 The same shape caught the stale-payload guard, which matched an error message the harness
 produces and the backend does not.
 
+**The dangerous class is RUNTIME restrictions, because push-time ones report themselves.**
+Components have at least two restrictions beyond ordinary Convex code. "Node actions are not
+supported in components" (`crates/application/src/deploy_config.rs:1183`) is a _deploy-time_
+bail: `convex dev --once` refuses the push and you find out in seconds. `paginate` pushes
+cleanly and throws on the call — which is precisely why it survived four heads of review. When
+auditing for this class, the question is not "what do components forbid" but "what do they
+forbid _at call time_".
+
 The rule that follows: **for anything touching a Convex API surface, a green suite is not
 evidence that the code runs.** Push the component to a real deployment and call the function.
 From a provisioned worktree that is about a minute:

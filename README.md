@@ -211,6 +211,11 @@ small, pass a larger one — roughly 22 at the default 64 KiB bound and roughly 
 capped at 20. Unlike `cleanup` this scan cannot budget by bytes, because it reads payload rows to
 discover their size; the limit is the only bound it has.
 
+The scan is eventually consistent per **pass**, not per call: a row inserted behind a scan that
+has already gone past it is found on the next pass, because `isDone` resets the cursor. At the
+default limit that pass can be long — 100 000 payload rows at a limit of 2 is 50 000 calls — so
+size `limit` for how quickly you want a leak found, not only for what one call can afford.
+
 The numbers are low because reclaiming an orphan pays for its payload **twice** — once to page
 it in, and again when `ctx.db.delete` re-reads the document it deletes. If you raise
 `maxPayloadBytes`, lower this limit to match: nothing can do it for you, since the scan never

@@ -436,10 +436,37 @@ export async function sweepOrphanedPayloads(
   // the front of the table permanently and an unordered take rescans the same page forever —
   // an orphan behind it is invisible for good. Not slow progress: no progress.
   //
+  // Progress is per PASS, not per call. `isDone` returns a null cursor, so the next pass
+  // restarts at the beginning and picks up anything inserted behind a scan that had already
+  // gone past — reachable, because `_creationTime` is fixed at transaction BEGIN, so a
+  // transaction that starts earlier and commits later lands below the cursor. That makes such
+  // a row transiently invisible and bounded by one pass. "One pass" is not necessarily
+  // short: at the default limit of 2, a pass over 100 000 payload rows is 50 000 calls.
+  //
   // `by_creation_time` is built in on every table (`system_fields.d.ts:40`), so this costs no
-  // schema change. `gt` rather than `gte` is safe because `_creationTime` is unique within a
-  // table: the backend advances `next_creation_time` past every document it observes and
-  // increments by `next_up()` on the float, so no two rows share one.
+  // schema change.
+  //
+  // `gt` rather than `gte`, and the safety of that is PROVEN within a transaction and ASSUMED
+  // across them. Stated as two things because they are two things:
+  //
+  //   proven   — a transaction advances `next_creation_time` past every document it observes
+  //              (`transaction.rs:527`) and increments with `next_up()` on the float
+  //              (`common/src/document.rs:218`), so rows written together cannot collide.
+  //   assumed  — the per-transaction base is `max(snapshot_ts, wall_clock)` fixed at BEGIN
+  //              (`database.rs:959`). Two transactions sharing a snapshot whose wall clock
+  //              has not passed it would take the same base, and nothing makes them conflict:
+  //              neither reads `by_creation_time`, so OCC sees no overlap. No enforcement
+  //              point was found.
+  //
+  // Convex clearly INTENDS uniqueness — `_creationTime` is its own index tiebreaker
+  // (`system_fields.ts:56`), which only works if unique — but intent is not enforcement. A
+  // collision would be permanent rather than transient: `gt` lands on the same value on every
+  // pass, so the row behind it is invisible for good, which is this function's recurring
+  // failure. It is left as is because two inserts colliding on a float at that resolution is
+  // vanishingly unlikely, and the fix is not free: carrying `(creationTime, id)`, querying
+  // `gte`, and skipping the carried id costs a re-read of a whole payload row on every call.
+  //
+  // If that trade ever looks wrong, this comment is the argument to revisit, not to trust.
   const rows = await ctx.db
     .query("payloads")
     .withIndex("by_creation_time", (q) => (after === null ? q : q.gt("_creationTime", after)))
