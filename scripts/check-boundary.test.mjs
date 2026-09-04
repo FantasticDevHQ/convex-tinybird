@@ -143,3 +143,21 @@ test("component-only rules do not apply to the example, which is a host app", ()
   assert.ok(src.sourcePatterns.length > 0, "the component must still be subject to them");
   assert.deepEqual(example.sourcePatterns, [], "the host app must not be");
 });
+
+test("a regex containing a quote is legal in the example, which no scanner reads", () => {
+  // The unterminated-string guard exists because the scanner does not lex regex literals, so a
+  // quote inside one would make it read code as string and string as code — in BOTH directions.
+  // That danger is real for `src`, whose scan output IS consumed. The example is scanned for
+  // imports only, so refusing to read the file there protects nothing and just rejects legal
+  // host-app code, telling the author to restructure a regex for a scanner that is not looking.
+  // Same shape as applying `.paginate` to the app: a component-scoped mechanism escaping scope.
+  assert.deepEqual(checkBoundary(fixture("example-regex-quote")), []);
+});
+
+test("the same regex in the COMPONENT is still refused", () => {
+  // The leg that stops the fix above from being a blanket disarm. Without it, deleting the guard
+  // entirely would pass both tests.
+  const failures = checkBoundary(fixture("host-cancelling-quotes"));
+  assert.ok(failures.length >= 1);
+  assert.match(failures.join("\n"), /unterminated/u);
+});

@@ -40,8 +40,16 @@ all three legs; only this works:
 
 ```bash
 cd packages/convex-tinybird/example
+
+# FIRST. `convex env set` writes to a deployment, so there has to be one — on a fresh clone this
+# line is the difference between the block working and `✖ No CONVEX_DEPLOYMENT set`. It is the
+# same command as the last line; it appears twice because the first call PROVISIONS and the last
+# call re-pushes so the mounts re-read their env.
+CONVEX_AGENT_MODE=anonymous npx convex dev --once
+
 CONVEX_AGENT_MODE=anonymous npx convex env set PRODUCT_TINYBIRD_TOKEN p.your_token
 CONVEX_AGENT_MODE=anonymous npx convex env set AUDIT_TINYBIRD_TOKEN   p.your_token
+
 CONVEX_AGENT_MODE=anonymous npx convex dev --once     # re-push so the mounts pick them up
 ```
 

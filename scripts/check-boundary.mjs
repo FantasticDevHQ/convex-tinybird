@@ -286,7 +286,12 @@ export function checkBoundary(packageRoot) {
       const path = join(dir, file);
       const text = readFileSync(path, "utf8");
       const { code, unterminated } = codeOnly(text);
-      if (unterminated !== null) {
+      // Only where the scanner's output is actually CONSUMED. A root with no source patterns
+      // never looks at `code`, so refusing to read the file protects nothing there — it just
+      // rejects legal host-app code (`const RE = /["]/gu;`) and tells the author to restructure a
+      // regex to help a scanner that is not scanning that tree. Same shape as applying
+      // `.paginate` to the example: a component-scoped mechanism escaping its scope.
+      if (unterminated !== null && sourcePatterns.length > 0) {
         // The scanner does not lex regular expressions, so a quote character inside one --
         // `/"/gu`, or an apostrophe in a character class -- opens a string that never closes.
         // From there it reads code as string and string as code, which breaks the gate in

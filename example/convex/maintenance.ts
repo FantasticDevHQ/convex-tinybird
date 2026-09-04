@@ -18,18 +18,28 @@ const auditEvents = new TinybirdDelivery(components.auditEvents);
  *
  * Rescue runs BEFORE the sweep: a rescued row becomes `pending` and is outside retention either
  * way, so the ordering costs nothing, while the reverse leaves a stuck row unexamined for a
- * whole interval.
+ * whole interval. Like the cursor claim below, this is REASONING AND NOT A TEST — swapping the
+ * two loops leaves this app's suite green. Both claims are grouped here so neither reads as
+ * checked because it sits next to something that is.
  *
  * The cursor is carried, not discarded. Every call without it restarts at the head of the scan,
  * and a page of work that is old but still HEALTHY sits there permanently — so a loop that drops
  * the cursor makes no progress at all in the condition this exists for.
  *
- * That last claim is NOT proven by this app's tests, and it is worth saying so rather than
- * leaving a comment that appears to vouch for one. Deleting `cursor = result.cursor` here leaves
- * the example suite green, because requeued rows leave the scan range and progress continues
- * without it; the cursor only becomes load-bearing when rows are scanned and NOT requeued, which
- * this fixture has no way to build. It is pinned where it is real, against the component
- * directly, in `src/component/cleanup.test.ts` — see the healthy-rows-occupy-the-window case.
+ * That last claim is NOT proven by this app's tests either. Deleting `cursor = result.cursor`
+ * here leaves the example suite green, because requeued rows leave the scan range and progress
+ * continues without it; the cursor only becomes load-bearing when rows are scanned and NOT
+ * requeued, which this fixture has no way to build.
+ *
+ * It is pinned where it is real, against the component directly:
+ * `src/component/requeuewindow.test.ts` — "makes no progress past live work when the cursor is
+ * discarded", which drives `requeueStuck`, the same function this loop calls.
+ *
+ * An earlier version of this comment cited `src/component/cleanup.test.ts` instead. That file's
+ * healthy-rows case drives `reclaimOrphanedPayloads` — a different function with its own cursor.
+ * A reader auditing this disclosure would have landed on a comment shaped exactly like the one
+ * they were sent to find and confirmed nothing, which makes a wrong pointer worse than no
+ * pointer: it converts an honest "not proven here" into a reference that does not check out.
  *
  * What this app's tests DO pin is that the job runs against every mounted stream and actually
  * removes expired rows from each: iterating one stream, or iterating none, both fail.
