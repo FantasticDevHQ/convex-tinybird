@@ -293,11 +293,13 @@ describe("the payload lives outside the counted row", () => {
     // tell a duplicate from a conflict. `lifecycle.ts` — `loadForDelivery`, which needs it
     // to send. Both run once per event, not once per paged read.
     //
-    // `state.ts` is the deliberate exception. Retention deletes a payload by the id its
+    // `state.ts` has TWO, and both are deliberate. Retention deletes a payload by the id its
     // event carries, which reads nothing; the index lookup is the fallback for a row whose
     // pointer was never recorded, because leaking a payload is worse than paying for one
-    // read, and it is bounded to rows that should not exist in the first place.
-    expect(reads).toMatchObject({ "lib.ts": 1, "lifecycle.ts": 1, "state.ts": 1 });
+    // read. The second is the orphan reclaim, which cannot avoid reading payload rows — and
+    // is a separate call for exactly that reason, so the frequent sweep stays cheap and the
+    // rare scan is allowed to be expensive.
+    expect(reads).toMatchObject({ "lib.ts": 1, "lifecycle.ts": 1, "state.ts": 2 });
 
     // Nowhere else, whatever else the component grows. Reported by name so a failure says
     // which file gained a consumer rather than only that a count moved.

@@ -104,6 +104,16 @@ export const DEFAULT_FAILED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
  */
 export const DEFAULT_CLEANUP_LIMIT = 200;
 
+/**
+ * How many payload rows one `reclaimOrphanedPayloads` call examines.
+ *
+ * Small where the retention limit is large, and for the opposite reason. Finding an orphan
+ * means READING payload rows, whose size a host controls up to
+ * {@link HARD_MAX_PAYLOAD_BYTES}; at that bound 25 rows is about 13 MB, so this is sized to
+ * stay inside one transaction whatever a host has configured.
+ */
+export const DEFAULT_ORPHAN_SCAN_LIMIT = 25;
+
 /** How many earlier failures an event keeps alongside its newest one. */
 export const MAX_ERROR_HISTORY = 5;
 

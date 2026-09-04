@@ -180,9 +180,19 @@ older than that, either raise `deliveredRetentionMs` or rely on Tinybird-side de
 answers "have I sent this", while a dead letter is something an operator may still act on, and
 the window to notice one is measured in weeks.
 
-Deleting an event deletes its payload row in the same transaction. Neither table is left with an
-orphan — a stranded payload would be invisible, since the whole point of keeping payloads out of
-the counted table is that nothing counts them.
+Deleting an event deletes its payload row in the same transaction, so the two cannot part
+company. Retention measures age from when an event **finished**, not from when it was created —
+an event that sat pending through a long pause and was delivered a moment ago keeps its full
+window, which matters because those are exactly the events a producer is most likely to re-emit.
+
+A retention that is negative, `NaN` or infinite is refused with `code: "invalid_retention"`
+rather than clamped. `NaN` is the reason: Convex orders it above every finite number, so a sweep
+given one would match every row of that state and delete events seconds old.
+
+`reclaimOrphanedPayloads` is a separate, rarer call for payload rows whose event has gone.
+Nothing here produces one — but finding them means reading payloads, and a payload is the one
+thing whose size you control, so folding that scan into the frequent sweep would make retention's
+cost depend on your event size again. Its default limit is 25 for the same reason.
 
 ## Replaying dead letters
 

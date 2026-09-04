@@ -5,6 +5,7 @@ import { mutation, query } from "./_generated/server";
 import {
   boundedCount,
   sweepExpired,
+  sweepOrphanedPayloads,
   patchSettings,
   readHeartbeat,
   recordActor,
@@ -14,6 +15,7 @@ import {
 } from "./state";
 import {
   DEFAULT_CLEANUP_LIMIT,
+  DEFAULT_ORPHAN_SCAN_LIMIT,
   DEFAULT_DELIVERED_RETENTION_MS,
   DEFAULT_FAILED_RETENTION_MS,
   DEFAULT_REPLAY_LIMIT,
@@ -292,20 +294,36 @@ export const cleanup = mutation({
     remaining: v.boolean(),
   }),
   handler: async (ctx, args) => {
-    const batch = boundedBatch(args.limit, DEFAULT_CLEANUP_LIMIT, DEFAULT_CLEANUP_LIMIT);
+    // Validated, not clamped. A retention is a caller's statement about what is safe to
+    // destroy, so a nonsensical one is a mistake to refuse rather than a value to guess at.
+    // `NaN` is the dangerous one: Convex orders it above every finite number, so
+    // `lt("updatedAt", NaN)` matches every row of that state and the sweep would delete rows
+    // one second old. A negative retention puts the cutoff in the future and does the same.
+    const retention = (value: number | undefined, fallback: number): number => {
+      if (value === undefined) return fallback;
+      if (!Number.isFinite(value) || value < 0) {
+        throw new ConvexError({ code: "invalid_retention" as const, retentionMs: value });
+      }
+      return value;
+    };
+    const deliveredRetentionMs = retention(
+      args.deliveredRetentionMs,
+      DEFAULT_DELIVERED_RETENTION_MS,
+    );
+    const failedRetentionMs = retention(args.failedRetentionMs, DEFAULT_FAILED_RETENTION_MS);
+
+    const budget = boundedBatch(args.limit, DEFAULT_CLEANUP_LIMIT, DEFAULT_CLEANUP_LIMIT);
     const now = Date.now();
 
-    const delivered = await sweepExpired(
-      ctx,
-      "delivered",
-      now - (args.deliveredRetentionMs ?? DEFAULT_DELIVERED_RETENTION_MS),
-      batch,
-    );
+    // ONE budget across both states, spent in order. A limit that applied per state would
+    // let `limit: 3` delete six rows, which is not what a caller bounding a transaction
+    // asked for.
+    const delivered = await sweepExpired(ctx, "delivered", now - deliveredRetentionMs, budget);
     const failed = await sweepExpired(
       ctx,
       "failed",
-      now - (args.failedRetentionMs ?? DEFAULT_FAILED_RETENTION_MS),
-      batch,
+      now - failedRetentionMs,
+      budget - delivered.deleted,
     );
 
     return {
@@ -313,6 +331,33 @@ export const cleanup = mutation({
       deletedFailed: failed.deleted,
       remaining: delivered.more || failed.more,
     };
+  },
+});
+
+/**
+ * Removes payload rows whose event is gone.
+ *
+ * Separate from `cleanup`, and deliberately so. Finding an orphan means reading payload
+ * rows, and a payload row is the one thing in this component whose size a host controls —
+ * so folding this into the retention sweep would put that sweep's cost back on payload size,
+ * which is the coupling `payloadId` exists to remove. Keeping it apart lets retention run
+ * often and cheaply while this runs rarely and is allowed to be expensive.
+ *
+ * Nothing here produces an orphan: an event and its payload are deleted in one mutation, so
+ * they cannot part company. This exists because the uncounted table is uncounted precisely
+ * so nothing has to look at it, which is also what would let a leak accumulate unseen if a
+ * future path ever did write a pair and lose half of it.
+ *
+ * The default limit is small for the same reason the retention limit is large: at the
+ * component's 512 KiB hard payload bound, reading 25 rows is about 13 MB, so this is sized
+ * to stay inside a transaction at any payload size a host may configure.
+ */
+export const reclaimOrphanedPayloads = mutation({
+  args: { limit: v.optional(v.number()) },
+  returns: v.object({ reclaimed: v.number(), scanned: v.number() }),
+  handler: async (ctx, { limit }) => {
+    const batch = boundedBatch(limit, DEFAULT_ORPHAN_SCAN_LIMIT, DEFAULT_ORPHAN_SCAN_LIMIT);
+    return sweepOrphanedPayloads(ctx, batch);
   },
 });
 

@@ -196,6 +196,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { paused: boolean },
         Name
       >;
+      reclaimOrphanedPayloads: FunctionReference<
+        "mutation",
+        "internal",
+        { limit?: number },
+        { reclaimed: number; scanned: number },
+        Name
+      >;
       replayEvent: FunctionReference<
         "mutation",
         "internal",

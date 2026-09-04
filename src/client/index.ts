@@ -184,6 +184,25 @@ export class TinybirdDelivery {
     return ctx.runMutation(this.component.lib.cleanup, args);
   }
 
+  /**
+   * Remove payload rows whose event is gone.
+   *
+   * Separate from `cleanup` on purpose: finding an orphan means reading payload rows, and a
+   * payload is the one thing here whose size you control — so folding this into the
+   * retention sweep would make that sweep's cost depend on your event size again. Run this
+   * rarely; run `cleanup` often.
+   *
+   * Nothing in the component produces an orphan, since an event and its payload are deleted
+   * in one mutation. This exists so that if something ever did, the leak would be found
+   * rather than accumulate in a table nothing counts.
+   */
+  async reclaimOrphanedPayloads(
+    ctx: RunMutationCtx,
+    args: { limit?: number } = {},
+  ): Promise<{ reclaimed: number; scanned: number }> {
+    return ctx.runMutation(this.component.lib.reclaimOrphanedPayloads, args);
+  }
+
   /** Replay one dead letter by its identity. */
   async replayEvent(
     ctx: RunMutationCtx,

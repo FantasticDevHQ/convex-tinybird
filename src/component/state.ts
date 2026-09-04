@@ -271,7 +271,18 @@ export async function deleteEventWithPayload(
   event: Doc<"events">,
 ): Promise<void> {
   if (event.payloadId !== undefined) {
-    await ctx.db.delete(event.payloadId);
+    // Tolerates a STALE pointer, and this is not defensive padding. FTD-2531 dead-letters an
+    // event whose payload row has gone, and nothing clears the pointer when that happens
+    // because the row vanished by some means outside this component. Deleting a missing
+    // document throws `Delete on non-existent doc`, and the throw would take down the whole
+    // sweep — every later call hitting the same row and failing again, so retention never
+    // runs for anything until someone intervenes by hand.
+    try {
+      await ctx.db.delete(event.payloadId);
+    } catch {
+      // Already gone is the outcome we wanted. Narrow on purpose: the only failure this can
+      // swallow is a delete of something that is not there.
+    }
   } else {
     const stored = await ctx.db
       .query("payloads")
@@ -298,13 +309,46 @@ export async function sweepExpired(
   cutoff: number,
   batch: number,
 ): Promise<{ deleted: number; more: boolean }> {
-  // One row past the batch, so "is there more" is answered by the same read rather than by
-  // a second query that could disagree with it.
+  // `updatedAt`, not `createdAt`: retention runs from when the event FINISHED. Both
+  // `markDelivered` and `markFailed` set it as they move the row into its terminal state,
+  // so for a swept row it is the moment it stopped being work.
+  //
+  // Creation time would be wrong in the case that matters most. An event that sat `pending`
+  // through a long pause and was delivered a moment ago already has a `createdAt` older
+  // than any retention, so it would be swept on the very next pass — giving a dedupe window
+  // of zero to exactly the events a producer is most likely to re-emit after noticing the
+  // outage.
+  if (batch <= 0) return { deleted: 0, more: true };
   const found = await ctx.db
     .query("events")
-    .withIndex("by_state_createdAt", (q) => q.eq("state", state).lt("createdAt", cutoff))
+    .withIndex("by_state_updatedAt", (q) => q.eq("state", state).lt("updatedAt", cutoff))
     .take(batch + 1);
   const selected = found.slice(0, batch);
   for (const event of selected) await deleteEventWithPayload(ctx, event);
   return { deleted: selected.length, more: found.length > selected.length };
+}
+
+/**
+ * Deletes payload rows whose event is gone.
+ *
+ * Nothing in the component produces one, and retention is the only thing that could — so a
+ * half-delete would accumulate silently, because the uncounted table is uncounted precisely
+ * so nothing has to look at it. This looks, cheaply and boundedly, and reports what it found
+ * rather than only removing it: an orphan appearing at all means something wrote a pair and
+ * lost half of it, which an operator should hear about.
+ */
+export async function sweepOrphanedPayloads(
+  ctx: MutationCtx,
+  batch: number,
+): Promise<{ reclaimed: number; scanned: number }> {
+  const candidates = await ctx.db.query("payloads").take(batch);
+  let reclaimed = 0;
+  for (const stored of candidates) {
+    if ((await ctx.db.get(stored.eventId)) === null) {
+      await ctx.db.delete(stored._id);
+      reclaimed += 1;
+    }
+  }
+  // `scanned` is reported so a caller can tell "no orphans" from "looked at nothing".
+  return { reclaimed, scanned: candidates.length };
 }

@@ -247,8 +247,17 @@ first thing that will delete anything at all.
 
 ## Retention
 
-`cleanup` walks `by_state_createdAt` for `delivered` and then for `failed`, each with its own
-cutoff, and deletes a bounded batch. `pending` and `delivering` are never queried — not queried
+`cleanup` walks `by_state_updatedAt` for `delivered` and then for `failed`, each with its own
+cutoff, and deletes a bounded batch spending ONE budget across both — a limit that applied per
+state would let `limit: 3` delete six rows, which is not what a caller bounding a transaction
+asked for.
+
+The index is on `updatedAt` rather than `createdAt` because retention measures age from when an
+event finished. Both `markDelivered` and `markFailed` set it as they move a row into its terminal
+state. Creation time would be wrong in the case that matters most: an event that sat `pending`
+through a long pause and was delivered a moment ago already has a `createdAt` older than any
+retention, so it would be swept on the very next pass — a dedupe window of zero for exactly the
+events a producer is most likely to re-emit after noticing the outage. `pending` and `delivering` are never queried — not queried
 and filtered, which is the difference between a rule and a comment. A row exactly at the cutoff
 is kept: the comparison is `lt`, because deleting on equality would quietly shorten every
 retention by one tick.
