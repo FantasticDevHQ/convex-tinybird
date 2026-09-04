@@ -235,17 +235,31 @@ export const DEFAULT_STUCK_AFTER_MS = 10 * 60 * 1000;
 /**
  * How many rows one `requeueStuck` call rescues, across BOTH scans.
  *
- * Rows here carry no payload text, so the cost is event rows rather than blobs. Per page:
- * `take(limit + 1)` from the index, ONE batched `pool.statusBatch` for the rows that have a
- * pointer, and then per rescued row `scheduleDelivery`'s own `ctx.db.get` plus its settings
- * read. Against the largest event the contract permits that is roughly 11 KB per row, so 100
- * rows is about 1.1 MiB — well under {@link SWEEP_READ_BUDGET_BYTES}.
+ * Six documents are read per rescued row, not the three an earlier version of this docblock
+ * counted. A PATCH reads the document it patches, exactly as a delete does — `patch_inner`
+ * calls `get_inner` at `crates/database/src/transaction.rs:587`, and `reads.rs:485` increments
+ * the meters unconditionally with no de-duplication by id. That is the same omitted term as
+ * {@link PAYLOAD_ROW_OVERHEAD_BYTES}: a mutating call that secretly reads.
  *
- * The status lookup is batched deliberately. One call per row would put a component call
- * inside the loop, and a per-row cost that nobody counted is the defect this package has
- * produced most often.
+ * | read | full event row? |
+ * |---|---|
+ * | the index scan | yes |
+ * | `requeueAbandoned`'s patch | yes |
+ * | `scheduleDelivery`'s settings query | no, one small row |
+ * | `scheduleDelivery`'s `ctx.db.get` | yes |
+ * | `scheduleDelivery`'s `workId` patch | yes |
+ * | the workpool's own bookkeeping | no |
  *
- * Matched to `DEFAULT_RESUME_LIMIT`: both put waiting work back on the pool, so a host that
- * has sized its cron for one has sized it for the other.
+ * Four of the six are the largest event the contract permits, so at
+ * {@link EVENT_ROW_BYTES} that is about 21.8 KB per row — twice what was claimed. Verification
+ * measured exactly 6.04 documents per row by tightening `convex-test`'s own meter.
+ *
+ * Hence fifty rather than a hundred: 50 x 21.8 KB is about 1.1 MiB, roughly 37% of
+ * {@link SWEEP_READ_BUDGET_BYTES}. A hundred would be 74%, which does not fail but leaves
+ * none of the headroom the number was chosen to express, and the budget is spent across BOTH
+ * scans so a saturated page costs the same whether or not anything is rescued.
+ *
+ * The status lookup is batched — one `pool.statusBatch` per page rather than a call per row —
+ * because a per-row cost nobody counted is the mistake this package has made most often.
  */
-export const DEFAULT_STUCK_LIMIT = 100;
+export const DEFAULT_STUCK_LIMIT = 50;

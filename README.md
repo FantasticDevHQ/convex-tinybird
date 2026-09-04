@@ -16,8 +16,7 @@ This package is being built in layers, and this README describes only what is ac
   a transient failure until the budget is spent, and pausing the destination when Tinybird
   refuses the credential, with `pause` and `resume` for operators, and replay of dead letters
   with an operator audit trail, and bounded retention cleanup.
-- **Not implemented yet:** requeueing events stuck in delivery, and datasource-scoped
-  operator controls.
+- **Not implemented yet:** datasource-scoped operator controls.
 
 `TINYBIRD_HOST` is validated before any request: it must be a bare `https` origin with no path,
 query, fragment or embedded credentials, the one exception being a loopback address for Tinybird

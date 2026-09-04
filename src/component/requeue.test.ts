@@ -5,6 +5,7 @@ import {
   installComponentTestHooks,
   jsonResponse,
   row,
+  settingsOf,
   setup,
   type TestInstance,
 } from "../testing/fixtures";
@@ -106,7 +107,7 @@ describe("requeueing work that stopped moving", () => {
     const t = setup();
     await parked(t, "crashed", { state: "delivering", ageMs: 30 * MINUTE, settled: true });
 
-    expect(await t.mutation(api.lib.requeueStuck, {})).toMatchObject({ requeued: 1 });
+    expect(await t.mutation(api.recovery.requeueStuck, {})).toMatchObject({ requeued: 1 });
     await drain(t);
 
     // Delivered again, not merely re-stated. The state alone would pass for an implementation
@@ -125,7 +126,7 @@ describe("requeueing work that stopped moving", () => {
     const t = setup();
     await parked(t, "queued", { state: "pending", ageMs: 30 * MINUTE, settled: false });
 
-    expect(await t.mutation(api.lib.requeueStuck, {})).toMatchObject({ requeued: 0 });
+    expect(await t.mutation(api.recovery.requeueStuck, {})).toMatchObject({ requeued: 0 });
     // Untouched: no `stuck` tag, and the original pointer intact.
     expect(await stateOf(t, "queued")).toMatchObject({
       state: "pending",
@@ -158,7 +159,7 @@ describe("requeueing work that stopped moving", () => {
     expect(await stateOf(t, "stranded")).toMatchObject({ hasWorkId: true });
     await t.mutation(api.lib.pause, {});
 
-    await t.mutation(api.lib.requeueStuck, {});
+    await t.mutation(api.recovery.requeueStuck, {});
 
     expect(await stateOf(t, "stranded")).toMatchObject({
       state: "pending",
@@ -178,7 +179,7 @@ describe("requeueing work that stopped moving", () => {
     const t = setup();
     await parked(t, "recent", { state: "delivering", ageMs: 1 * MINUTE, settled: true });
 
-    expect(await t.mutation(api.lib.requeueStuck, {})).toMatchObject({ requeued: 0 });
+    expect(await t.mutation(api.recovery.requeueStuck, {})).toMatchObject({ requeued: 0 });
     expect(await stateOf(t, "recent")).toMatchObject({ state: "delivering" });
   });
 
@@ -194,7 +195,7 @@ describe("requeueing work that stopped moving", () => {
     await parked(t, "unacked", { state: "delivering", ageMs: 30 * MINUTE, settled: true });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
-    await t.mutation(api.lib.requeueStuck, {});
+    await t.mutation(api.recovery.requeueStuck, {});
     await drain(t);
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
@@ -215,7 +216,7 @@ describe("requeueing work that stopped moving", () => {
       await parked(t, `live-${i}`, { state: "pending", ageMs: 30 * MINUTE, settled: false });
     }
 
-    const result = await t.mutation(api.lib.requeueStuck, { limit: 2 });
+    const result = await t.mutation(api.recovery.requeueStuck, { limit: 2 });
     expect(result.requeued).toBe(0);
     expect(result.remaining).toBe(true);
   });
@@ -229,7 +230,7 @@ describe("requeueing work that stopped moving", () => {
     await parked(t, "p1", { state: "pending", ageMs: 30 * MINUTE, settled: true });
 
     // Two, not three: a limit of 2 bounds the call rather than authorising two per scan.
-    expect(await t.mutation(api.lib.requeueStuck, { limit: 2 })).toMatchObject({
+    expect(await t.mutation(api.recovery.requeueStuck, { limit: 2 })).toMatchObject({
       requeued: 2,
       remaining: true,
     });
@@ -250,7 +251,7 @@ describe("requeueing work that stopped moving", () => {
     await parked(t, "live", { state: "delivering", ageMs: 0, settled: false });
 
     for (const olderThanMs of [Number.NaN, -1, Number.POSITIVE_INFINITY]) {
-      expect(await codeOf(t.mutation(api.lib.requeueStuck, { olderThanMs }))).toBe(
+      expect(await codeOf(t.mutation(api.recovery.requeueStuck, { olderThanMs }))).toBe(
         "invalid_threshold",
       );
     }
@@ -276,7 +277,109 @@ describe("requeueing work that stopped moving", () => {
       await parked(t, `busy-${i}`, { state: "delivering", ageMs: 30 * MINUTE, settled: false });
     }
 
-    expect(await t.mutation(api.lib.requeueStuck, { limit: 2 })).toMatchObject({ requeued: 1 });
+    expect(await t.mutation(api.recovery.requeueStuck, { limit: 2 })).toMatchObject({
+      requeued: 1,
+    });
     expect(await stateOf(t, "behind")).toMatchObject({ tagged: true });
+  });
+
+  it("reaches an abandoned row sitting behind older live work", async () => {
+    // The crowding defect, on the AGE axis this time. A row skipped for still working is never
+    // patched, so its `updatedAt` never moves and it stays at the head of
+    // `by_state_updatedAt` — without a cursor the scan reads the same page on every call for
+    // ever, returning `requeued: 0, remaining: true` and never reaching anything behind it.
+    //
+    // This is the condition the cron exists to recover from, not a corner case:
+    // `maxParallelism` is 4, so a backlog of a few hundred puts the tail past the threshold
+    // while every item is healthy. Verification reproduced it on a real deployment against an
+    // earlier revision and showed the abandoned row became rescuable when the ONLY change was
+    // making the live rows younger than it.
+    //
+    // Seeding order is load-bearing: the settled row must be built FIRST, because `drain`
+    // finishes every scheduled function and would otherwise settle the rows this needs alive.
+    const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await parked(t, "behind", { state: "pending", ageMs: 30 * MINUTE, settled: true });
+    for (let i = 0; i < 3; i += 1) {
+      await parked(t, `ahead-${i}`, {
+        state: "pending",
+        ageMs: (60 - i) * MINUTE,
+        settled: false,
+      });
+    }
+
+    // The host loop from the README, carrying the cursor as documented.
+    let cursor: { delivering: number | null; pending: number | null } | undefined;
+    let requeued = 0;
+    for (let pass = 0; pass < 10; pass += 1) {
+      const result = await t.mutation(api.recovery.requeueStuck, { limit: 3, cursor });
+      requeued += result.requeued;
+      cursor = result.cursor;
+      if (!result.remaining) break;
+    }
+
+    expect(requeued).toBe(1);
+    expect(await stateOf(t, "behind")).toMatchObject({ tagged: true });
+    // And the live rows were left alone throughout, which is the other half of the claim.
+    expect(await stateOf(t, "ahead-0")).toMatchObject({ tagged: false, hasWorkId: true });
+  });
+
+  it("keeps the failure that was on the row, so a rescue is not a diagnosis erased", async () => {
+    // The rescue writes `lastError: { category: "stuck" }`, and that message describes the
+    // RESCUE, not the fault. An operator investigating a rescued event needs the 503 that was
+    // there before it. Every other transition in state.ts preserves it with `pushHistory`;
+    // this one did not, which made it the only place in the file that destroyed evidence.
+    const fetchSpy = vi
+      .fn()
+      .mockImplementation(() => jsonResponse(503, { error: "upstream unavailable" }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    // A real failure first, so there is a real diagnostic to lose.
+    await parked(t, "was-failing", { state: "delivering", ageMs: 30 * MINUTE, settled: true });
+    const before = await t.run(async (ctx) => (await ctx.db.query("events").first())?.lastError);
+    // Read back rather than predicted: the delivery path decides the category, and asserting a
+    // guessed literal here tests my model of that path instead of this one. It must simply be
+    // a real diagnostic and not already the rescue's own tag.
+    expect(before?.category).toBeDefined();
+    expect(before?.category).not.toBe("stuck");
+
+    await t.mutation(api.recovery.requeueStuck, {});
+
+    const after = await t.run(async (ctx) => ctx.db.query("events").first());
+    expect(after?.lastError?.category).toBe("stuck");
+    // Whatever it was is still on the row. Containment rather than index 0, because the
+    // delivery path has already pushed its own history and pinning a position would assert
+    // `pushHistory`'s ordering instead of the claim this test is making.
+    expect(after?.previousErrors?.map((error) => error.category)).toContain(before?.category);
+  });
+
+  it("records the rescue in the operator trail, but not on a no-op pass", async () => {
+    // `actor` was accepted and never used: the README documents passing it and nothing was
+    // written. It is recorded now — and only when something was actually rescued, because
+    // `lastOperatorAction` is a single slot shared with pause, resume and both replays, and
+    // this runs on a cron. Writing it every pass would erase the last human action within a
+    // day, which is exactly the defect FTD-2502 fixed for `cleanup`.
+    const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await t.mutation(api.lib.pause, { actor: "alice@example.com" });
+    await t.mutation(api.lib.resume, { actor: "alice@example.com" });
+
+    // Nothing to do: the human's action must survive.
+    await t.mutation(api.recovery.requeueStuck, { actor: "nightly cron" });
+    expect((await settingsOf(t))?.lastOperatorAction).toMatchObject({
+      kind: "resume",
+      actor: "alice@example.com",
+    });
+
+    // Something to do: now it is attributed.
+    await parked(t, "rescued", { state: "delivering", ageMs: 30 * MINUTE, settled: true });
+    await t.mutation(api.recovery.requeueStuck, { actor: "nightly cron" });
+    expect((await settingsOf(t))?.lastOperatorAction).toMatchObject({
+      kind: "requeueStuck",
+      actor: "nightly cron",
+      count: 1,
+    });
   });
 });

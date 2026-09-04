@@ -226,6 +226,7 @@ export const vOperatorAction = v.object({
     v.literal("replayFailed"),
     v.literal("replayEvent"),
     v.literal("cleanup"),
+    v.literal("requeueStuck"),
   ),
   actor: v.optional(v.string()),
   at: v.number(),

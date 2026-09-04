@@ -245,7 +245,7 @@ export class TinybirdDelivery {
     ctx: RunMutationCtx,
     args: { olderThanMs?: number; limit?: number; actor?: string } = {},
   ): Promise<{ requeued: number; remaining: boolean }> {
-    return ctx.runMutation(this.component.lib.requeueStuck, args);
+    return ctx.runMutation(this.component.recovery.requeueStuck, args);
   }
 
   /** Replay one dead letter by its identity. */

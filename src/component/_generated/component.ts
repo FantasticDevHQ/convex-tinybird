@@ -144,7 +144,12 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             at: number;
             count?: number;
             kind:
-              "pause" | "resume" | "replayFailed" | "replayEvent" | "cleanup";
+              | "pause"
+              | "resume"
+              | "replayFailed"
+              | "replayEvent"
+              | "cleanup"
+              | "requeueStuck";
           };
           oldestPendingAgeMs: number | null;
           paused: boolean;
@@ -183,7 +188,12 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             at: number;
             count?: number;
             kind:
-              "pause" | "resume" | "replayFailed" | "replayEvent" | "cleanup";
+              | "pause"
+              | "resume"
+              | "replayFailed"
+              | "replayEvent"
+              | "cleanup"
+              | "requeueStuck";
           };
           oldestPendingAgeMs: number | null;
           paused: boolean;
@@ -227,18 +237,29 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { remaining: boolean; replayed: number },
         Name
       >;
-      requeueStuck: FunctionReference<
-        "mutation",
-        "internal",
-        { actor?: string; limit?: number; olderThanMs?: number },
-        { remaining: boolean; requeued: number },
-        Name
-      >;
       resume: FunctionReference<
         "mutation",
         "internal",
         { actor?: string; limit?: number },
         { paused: boolean; requeued: number },
+        Name
+      >;
+    };
+    recovery: {
+      requeueStuck: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          actor?: string;
+          cursor?: { delivering: number | null; pending: number | null };
+          limit?: number;
+          olderThanMs?: number;
+        },
+        {
+          cursor: { delivering: number | null; pending: number | null };
+          remaining: boolean;
+          requeued: number;
+        },
         Name
       >;
     };

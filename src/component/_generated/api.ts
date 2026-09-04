@@ -18,6 +18,7 @@ import type * as destination from "../destination.js";
 import type * as lib from "../lib.js";
 import type * as lifecycle from "../lifecycle.js";
 import type * as pool from "../pool.js";
+import type * as recovery from "../recovery.js";
 import type * as sanitize from "../sanitize.js";
 import type * as state from "../state.js";
 
@@ -39,6 +40,7 @@ const fullApi: ApiFromModules<{
   lib: typeof lib;
   lifecycle: typeof lifecycle;
   pool: typeof pool;
+  recovery: typeof recovery;
   sanitize: typeof sanitize;
   state: typeof state;
 }> = anyApi as any;

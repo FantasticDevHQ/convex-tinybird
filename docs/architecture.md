@@ -107,7 +107,7 @@ enqueue ──▶ pending ──(Workpool action)──▶ delivering ──▶ 
                 │ transient failure (Workpool retry)   │ terminal failure / retries exhausted
                 └──────────────────────────────┴──▶ failed ──(replayFailed)──▶ pending
 paused destination: actions defer and events stay pending; 401/403 or an invalid host pauses it
-stuck: delivering older than a threshold ──(requeueStuck)──▶ pending
+  stuck: work item finished, row did not advance ──(requeueStuck)──▶ pending
 ```
 
 States live on the `events` row (`pending | delivering | delivered | failed`); destination-wide

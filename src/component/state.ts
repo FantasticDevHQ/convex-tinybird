@@ -16,7 +16,7 @@ import {
   type vPausedReason,
 } from "./contract";
 import { EVENT_ROW_BYTES, PAYLOAD_ROW_OVERHEAD_BYTES } from "./budget";
-import { type WorkId, pool } from "./pool";
+import { pool } from "./pool";
 import { sanitizeMessage } from "./sanitize";
 
 /**
@@ -492,98 +492,4 @@ export async function sweepOrphanedPayloads(
     cursor: isDone ? null : (rows.at(-1)?._creationTime ?? null),
     isDone,
   };
-}
-
-/**
- * Returns one page of ABANDONED rows to `pending` and puts them back on the pool.
- *
- * The discriminator is the Workpool item, not the clock. A row is abandoned when its work
- * item has FINISHED while the row never advanced — the item completed, was cancelled, or
- * vanished with the process that carried it. Age alone cannot tell that apart from work that
- * is merely waiting, and getting this wrong is not a small error: requeueing a live delivery
- * gives the event a second work item and therefore a second retry budget, which is the
- * FTD-2531 defect, and it sends the event twice.
- *
- * An earlier version of this used age as the criterion and was wrong in both directions:
- *
- *   `markAttemptFailed` sets `pending` and KEEPS `workId` without refreshing `updatedAt`, so
- *   a row in Workpool retry backoff is exactly the shape this hunts. `RETRY_LIMITS` permits
- *   `initialBackoffMs` up to 60 s with `base` up to 4, so a legal policy waits 64 minutes on
- *   its fourth attempt — six times the threshold. Verification measured 4 fetches against a
- *   `maxAttempts: 2` policy: twice the budget, twice the sends.
- *
- *   And the default config reaches it without any backoff at all. `maxParallelism` is 4, so a
- *   backlog of roughly 160 events puts the tail past ten minutes while its items are still
- *   queued and perfectly alive.
- *
- * So the threshold now only BOUNDS the scan — it says which rows are worth asking about — and
- * `statusBatch` decides. One batched call per page rather than one per row.
- *
- * The scan is ordered by `updatedAt`, which matters as much as the discriminator. The first
- * version used `by_state_workId_createdAt` with `gt("workId", undefined)`, and that index is
- * ordered by an OPAQUE Workpool id uncorrelated with age: `take(batch + 1)` therefore took the
- * first hundred by workId and applied age as a filter afterwards, so young rows crowded out
- * old ones — the exact failure the index was chosen to avoid, fixed on one axis and left open
- * on the other. Verification built 101 young rows whose ids sorted before one stranded row and
- * showed it was never found, with `remaining: false` telling the host to stop looking.
- *
- * `workId === undefined` on a `pending` row is also abandoned: that is a row `resume` would
- * rescue, and rescuing it here removes it from the window rather than letting it crowd.
- */
-export async function requeueAbandoned(
-  ctx: MutationCtx,
-  state: "delivering" | "pending",
-  cutoff: number,
-  batch: number,
-): Promise<{ requeued: number; visited: number; more: boolean }> {
-  if (batch <= 0) return { requeued: 0, visited: 0, more: true };
-  const found = await ctx.db
-    .query("events")
-    .withIndex("by_state_updatedAt", (q) => q.eq("state", state).lt("updatedAt", cutoff))
-    .take(batch + 1);
-  const selected = found.slice(0, batch);
-
-  // One status call for the whole page. Asking per row would put a component call inside the
-  // loop, which is the cost shape this package has repeatedly got wrong.
-  const scheduled = selected.filter((event) => event.workId !== undefined);
-  const statuses =
-    scheduled.length === 0
-      ? []
-      : await pool.statusBatch(
-          ctx,
-          scheduled.map((event) => event.workId as WorkId),
-        );
-  const stillWorking = new Set<string>();
-  scheduled.forEach((event, index) => {
-    // Anything that is not `finished` is alive — `pending` in the pool's queue or `running`.
-    // Leave it alone; it will advance on its own, and a second item would not help.
-    if (statuses[index]?.state !== "finished") stillWorking.add(event.workId as string);
-  });
-
-  let requeued = 0;
-  for (const event of selected) {
-    if (event.workId !== undefined && stillWorking.has(event.workId)) continue;
-    await ctx.db.patch(event._id, {
-      state: "pending",
-      // Cleared so `resume` can see the row as well. Leaving it set is what made the second
-      // stranding path invisible in the first place.
-      workId: undefined,
-      updatedAt: Date.now(),
-      lastError: {
-        category: "stuck" as const,
-        message: `No progress for ${Math.round((Date.now() - event.updatedAt) / 60000)} minutes`,
-        at: Date.now(),
-      },
-    });
-    // Counted here, not after `scheduleDelivery`. The row HAS been rescued — its pointer is
-    // cleared and `resume` can reach it — even when scheduling is declined because the
-    // instance is paused or unconfigured. Reporting 0 for rows this call modified was how the
-    // window defect above stayed invisible: `requeued: 0, remaining: false` looks like
-    // "nothing to do" and is indistinguishable from "found nothing".
-    requeued += 1;
-    await scheduleDelivery(ctx, event._id);
-  }
-  // Computed from the UNFILTERED page, so a page full of live work still reports that more
-  // rows are waiting rather than telling the host to stop.
-  return { requeued, visited: selected.length, more: found.length > selected.length };
 }
