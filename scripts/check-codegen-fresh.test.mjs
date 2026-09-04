@@ -78,3 +78,58 @@ test("ignores internal functions, which the host-facing api correctly omits", ()
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a new COMPONENT module absent from _generated/api.ts is caught", () => {
+  // Hole 1. The component half checked only that each exported function had a
+  // FunctionReference and never read `fullApi` at all, so an unregistered module passed — the
+  // exact class of defect this script names as its reason for existing, unguarded on the half
+  // of the package that actually gets bundled and pushed.
+  const dir = copyPackage();
+  try {
+    writeFileSync(join(dir, "src", "component", "zzmodule.ts"), 'export const zz = "x";\n');
+    const failures = checkCodegenFresh(dir);
+    assert.equal(failures.length, 1);
+    assert.match(failures[0], /module "zzmodule" exists in source and is not declared/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a FunctionReference left behind by a deleted public function is caught", () => {
+  // Hole 2. Source→generated only: turning a public function internal left its reference
+  // standing, and a host kept typechecking against a function that no longer exists.
+  const dir = copyPackage();
+  try {
+    const lib = join(dir, "src", "component", "lib.ts");
+    writeFileSync(
+      lib,
+      readFileSync(lib, "utf8").replace(
+        "export const resume = mutation(",
+        "export const resume = internalMutation(",
+      ),
+    );
+    const failures = checkCodegenFresh(dir);
+    assert.ok(failures.some((line) => /declares "resume", which is no longer/u.test(line)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("files Convex is correct to omit do not fail the gate", () => {
+  // Hole 3, the false-positive direction — the failure mode this script argues hardest against.
+  // A `.d.ts`, a helper with no top-level import/export, a dotfile, an editor tempfile and a
+  // name with a space are all things the bundler skips; demanding modules for them fails the
+  // gate on output that is perfectly fresh.
+  const dir = copyPackage();
+  try {
+    const convex = join(dir, "example", "convex");
+    writeFileSync(join(convex, "shims.d.ts"), 'declare module "x";\n');
+    writeFileSync(join(convex, "helper.ts"), "const helper = 1;\n");
+    writeFileSync(join(convex, ".hidden.ts"), "export const h = 1;\n");
+    writeFileSync(join(convex, "#tmp.ts"), "export const t = 1;\n");
+    writeFileSync(join(convex, "has space.ts"), "export const s = 1;\n");
+    assert.deepEqual(checkCodegenFresh(dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
