@@ -76,8 +76,8 @@ Payloads must be JSON objects under 64 KiB (configurable up to 512 KiB).
 ## Monitoring
 
 `health` is the operator view. Each state is counted through an index and stops at a cap, so the
-query reads at most 250 rows per state and never scans the table. A capped count reports
-`capped: true` rather than an exact number, because "more than 250 waiting" is the answer
+query reads at most 150 rows per state and never scans the table. A capped count reports
+`capped: true` rather than an exact number, because "more than 150 waiting" is the answer
 an operator acts on.
 
 **Know the real cost before you rely on it.** Convex reads whole documents and allows about 8 MiB
@@ -88,10 +88,11 @@ roughly 130 unfinished events at the default 64 KiB payload bound, which is the 
 purpose was to stay cheap failing on exactly the backlog it exists to report.
 
 What is left is the cap itself, and it is sized from a measured row rather than an estimated one.
-The largest event the contract permits — every string at its maximum, a full failure history — is
-about 2.4 KB. `health` counts three states and reads one row past the cap in each, so a full call
-is `3 x 251 x 2.4 KB`, roughly 1.8 MiB of the 8. A cap of 1000 would have been 7 MiB, which is 88%
-of the budget on exactly the day you need the query.
+The largest event the contract permits is about 5.4 KB — every string at its maximum, a full
+failure history, and those strings filled with the costliest characters the caps admit, because
+the caps count UTF-16 units while storage counts UTF-8 bytes. `health` counts three states and
+reads one row past the cap in each, so a full call is `3 x 151 x 5.4 KB`, roughly 2.3 MiB of the 8. A cap of 1000 would have been 15 MiB — twice the budget — on exactly the day you need the
+query.
 
 **Alert on `heartbeat`, not on `health`.** It reads exactly two documents however much is queued,
 returns `paused` and `oldestPendingAgeMs`, and costs the same on your worst day as on your best.

@@ -4,7 +4,12 @@ import { MAX_ERROR_MESSAGE_LENGTH } from "./sanitize";
 
 installComponentTestHooks();
 
-/** Convex's documented per-call read budget. */
+/**
+ * Convex's documented per-call read budget for the hosted product.
+ *
+ * Conservative twice over: the OSS backend's own default knob is 16 MiB, and this uses the
+ * published cloud figure instead.
+ */
 const READ_BUDGET_BYTES = 8 * 1024 * 1024;
 
 /** The fraction of that budget `health`'s worst case is allowed to occupy. */
@@ -23,16 +28,23 @@ const STATES_COUNTED = 3;
  */
 async function measureWorstCaseRow(): Promise<number> {
   const t = setup("");
+  // Every length cap in this contract counts UTF-16 code units, but Convex sizes a string
+  // by its UTF-8 bytes. So the most expensive string a cap admits is not ASCII: a BMP
+  // character outside Latin-1 is one code unit and three bytes, which is the worst ratio
+  // available. An emoji is worse per character but cheaper per unit — two units, four bytes
+  // — so it buys less under a length cap. An ASCII fixture measures a third of the truth.
+  const fill = (units: number) => "\u4e2d".repeat(units);
   const error = (i: number) => ({
     category: "server_error" as const,
     httpStatus: 503,
-    message: `${i}`.padEnd(MAX_ERROR_MESSAGE_LENGTH, "x"),
-    at: Date.now(),
+    message: fill(MAX_ERROR_MESSAGE_LENGTH),
+    at: Date.now() + i,
   });
   await t.run(async (ctx) => {
     await seedEvent(ctx, {
+      // The datasource pattern is `[A-Za-z0-9_]`, so this one really is ASCII-bound.
       datasource: "d".repeat(128),
-      eventId: "e".repeat(MAX_EVENT_ID_LENGTH),
+      eventId: fill(MAX_EVENT_ID_LENGTH),
       state: "failed" as const,
       attempts: 5,
       createdAt: Date.now(),
@@ -52,11 +64,23 @@ async function measureWorstCaseRow(): Promise<number> {
   // undefined length silently does nothing, which is how an earlier version of this probe
   // measured 1264 bytes instead of 2458 and made the cap look twice as safe as it is.
   expect(row?.eventId).toHaveLength(MAX_EVENT_ID_LENGTH);
+  // Length is not size. Asserting only the length is how an ASCII fixture passes for a
+  // maximal one, so the byte cost of the capped strings is asserted too.
+  expect(Buffer.byteLength(row?.eventId ?? "", "utf8")).toBe(MAX_EVENT_ID_LENGTH * 3);
+  expect(Buffer.byteLength(row?.lastError?.message ?? "", "utf8")).toBe(
+    MAX_ERROR_MESSAGE_LENGTH * 3,
+  );
   expect(row?.datasource).toHaveLength(128);
   expect(row?.lastError?.message).toHaveLength(MAX_ERROR_MESSAGE_LENGTH);
   expect(row?.previousErrors).toHaveLength(MAX_ERROR_HISTORY);
   expect(row?.previousErrors?.[0]?.message).toHaveLength(MAX_ERROR_MESSAGE_LENGTH);
 
+  // `JSON.stringify` is a PROXY for what Convex counts, and it errs in the safe direction.
+  // Convex sizes a document as `1 + Σ(fieldName.len + 1 + value.size()) + 1` per object,
+  // strings as `utf8 length + 2`, floats as 9. JSON spends two quotes on every field name
+  // where Convex spends one, and a comma between fields where Convex spends none; strings
+  // cost the same either way. Independently reconstructed against this exact fixture, the
+  // two come to 2462 and 2370 — so this over-states by about 4%.
   return Buffer.byteLength(JSON.stringify(row), "utf8");
 }
 

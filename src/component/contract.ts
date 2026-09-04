@@ -73,19 +73,32 @@ export const MAX_ERROR_HISTORY = 5;
  *
  * Sized from a MEASURED row, not an estimated one. `healthcost.test.ts` builds the largest
  * event the contract permits — every string at its documented maximum, every optional field
- * present — and it comes to about 2.4 KB. `health` counts three states and reads one row
- * past the cap in each, so the worst call is `3 x (cap + 1) x 2.4 KB` against Convex's
- * roughly 8 MiB per-call budget:
+ * present, and every capped string filled with the costliest characters those caps admit —
+ * and it comes to about 5.4 KB. `health` counts three states and reads one row past the cap
+ * in each, so the worst call is `3 x (cap + 1) x 5.4 KB` against Convex's roughly 8 MiB
+ * per-call budget:
  *
  * | cap | worst call | share of budget |
  * |---|---|---|
- * | 1000 | 7.0 MiB | 88% |
- * | 500 | 3.5 MiB | 44% |
- * | 250 | 1.8 MiB | 22% |
+ * | 1000 | 15.4 MiB | 192% |
+ * | 250 | 3.9 MiB | 48% |
+ * | 150 | 2.3 MiB | 29% |
  *
- * A thousand rows was 88% of the budget, and that shape is not pathological: a sustained
- * outage produces exactly a thousand failed events each carrying a full failure history, so
- * the worst case and the case an operator reaches for `health` in are the same case.
+ * That shape is not pathological: a sustained outage produces exactly that many failed
+ * events each carrying a full failure history, so the worst case and the case an operator
+ * reaches for `health` in are the same case.
+ *
+ * Note what "largest the contract permits" had to mean. Every length cap here counts UTF-16
+ * code units while Convex sizes a string by its UTF-8 bytes, so the most expensive string a
+ * cap admits is not ASCII — a BMP character outside Latin-1 is one unit and three bytes, the
+ * worst ratio available. An ASCII fixture measures 2458 bytes for this row and a truthful
+ * one measures 5370, which is most of the gap against the 2.1 KB the ticket had estimated.
+ * Capping those strings in bytes instead would let this constant rise again; that is
+ * FTD-2600.
+ *
+ * The measurement uses `JSON.stringify` as a proxy for Convex's own document sizing, which
+ * over-states it by roughly 4%: JSON spends two quotes per field name and a comma between
+ * fields where Convex spends one and none. So these figures err towards caution.
  *
  * This was unreachable before FTD-2525. The payload used to sit on the event row, so a call
  * died on bytes at roughly 130 events and the cap never came into play. Removing the payload
@@ -98,10 +111,10 @@ export const MAX_ERROR_HISTORY = 5;
  * that single row, trading a read bound for write contention on the hot path — a worse
  * trade for a component whose whole job is ingest. Lowering the cap costs only precision in
  * an answer that is already deliberately imprecise: `capped: true` means "more than this",
- * and an operator acts the same on 250 as on 1000. `oldestPendingAgeMs` from `heartbeat`
+ * and an operator acts the same on 150 as on 1000. `oldestPendingAgeMs` from `heartbeat`
  * tells them the severity, and it reads two documents whatever the backlog.
  */
-export const COUNT_CAP = 250;
+export const COUNT_CAP = 150;
 
 // ---------------------------------------------------------------------------- request policy
 

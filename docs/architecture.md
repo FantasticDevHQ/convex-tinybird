@@ -124,10 +124,18 @@ cap is once again the thing that binds.
 That made the cap reachable for the first time, and FTD-2530 then sized it from a measured row
 rather than an estimated one. `healthcost.test.ts` builds the largest event the contract permits —
 `eventId` at 256, `datasource` at 128, `lastError` and a full `previousErrors` of 200-character
-messages, every optional field present — and it comes to about 2.4 KB, not the 2.1 KB the estimate
-had assumed. `health` counts three states and reads one row past the cap in each, so the worst
-call is `3 x (cap + 1) x 2.4 KB`. At the old cap of 1000 that was 7.0 MiB, **88% of the ~8 MiB
-budget**; at 250 it is 1.8 MiB, 22%.
+messages, every optional field present — and it comes to about 5.4 KB, not the 2.1 KB the estimate
+had assumed.
+
+Most of that gap is one thing. Every length cap here counts UTF-16 code units while Convex sizes a
+string by its UTF-8 bytes, so the most expensive string a cap admits is not ASCII: a BMP character
+outside Latin-1 is one unit and three bytes, the worst ratio available. Filled with ASCII the same
+row measures 2458 bytes; filled truthfully it measures 5370. Bounding those strings in bytes would
+let the cap rise again, which is FTD-2600.
+
+`health` counts three states and reads one row past the cap in each, so the worst call is
+`3 x (cap + 1) x 5.4 KB`. At the old cap of 1000 that was 15.4 MiB — **nearly twice the ~8 MiB
+budget**; at 150 it is 2.3 MiB, 29%.
 
 That shape is not hypothetical: a sustained outage produces exactly that many failed rows each
 carrying a full history, so the worst case and the case an operator reaches for `health` in are
