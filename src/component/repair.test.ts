@@ -1,5 +1,5 @@
 import { api, internal } from "./_generated/api";
-import { canonicalJson } from "./canonical";
+import { canonicalJson, payloadFingerprint, utf8Length } from "./canonical";
 import {
   codeOf,
   drain,
@@ -331,6 +331,18 @@ describe("repairing a lost payload", () => {
     // Found by brute force over `{"a":"<v>"}` — the point is not that a host would hit it by
     // accident, but that with the byte check removed the suite could not tell. Every other
     // repair fixture differs in both length and hash, so nothing else discriminates them.
+    //
+    // The premise is asserted, not assumed. This test's whole discriminating power rests on
+    // those two payloads colliding, and nothing else in the suite pins the hash's identity:
+    // change the FNV offset basis and they stop colliding, the test starts passing because
+    // the fingerprint now catches the mismatch, and the byte check it exists to bind can be
+    // deleted again with everything green. Verification measured exactly that. So the
+    // collision is checked here, and a change to the hash reds this test rather than
+    // disarming it.
+    const left = canonicalJson({ a: "8pwf" });
+    const right = canonicalJson({ a: "0j0e0" });
+    expect(payloadFingerprint(left)).toBe(payloadFingerprint(right));
+    expect(utf8Length(left)).not.toBe(utf8Length(right));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, accepted)));
     const t = setup();
     await t.mutation(api.lib.enqueue, {
