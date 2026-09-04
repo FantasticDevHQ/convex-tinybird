@@ -391,4 +391,75 @@ describe("how the scan walks", () => {
 
     expect(await stateOf(t, "victim")).toMatchObject({ tagged: true });
   });
+
+  it("reaches a delivering row past the first page of a tied group", async () => {
+    // The same oversized-tie case on the DELIVERING scan. `requeueAbandoned` is shared, so it
+    // is tempting to assume the pending-side result carries over — but that is a claim about
+    // the code, not a measurement of it, and verification declined to make it. So do I.
+    //
+    // Eight delivering rows sharing one `updatedAt`, seven with live pool items, the victim
+    // seventh with a reaped pointer.
+    const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    const ids = ["e0", "e1", "e2", "e3", "e4", "e5", "victim", "e7"];
+    for (const id of ids) {
+      await t.mutation(api.lib.enqueue, { datasource: "events", eventId: id, payload: row });
+    }
+    const stale = await t.run(async (ctx) => {
+      const event = await ctx.db
+        .query("events")
+        .withIndex("by_identity", (q) => q.eq("datasource", "events").eq("eventId", "victim"))
+        .unique();
+      return event?.workId;
+    });
+    await drain(t);
+
+    const tied = Date.now() - 30 * MINUTE;
+    await t.run(async (ctx) => {
+      for (const event of await ctx.db.query("events").take(50)) {
+        await ctx.db.patch(event._id, { state: "pending", updatedAt: tied });
+      }
+    });
+    // Fresh live items for everything, then the victim's reaped pointer restored and all of
+    // them moved to `delivering`.
+    await t.mutation(api.lib.resume, {});
+    await t.run(async (ctx) => {
+      for (const event of await ctx.db.query("events").take(50)) {
+        const isVictim = event.eventId === "victim";
+        await ctx.db.patch(event._id, {
+          state: "delivering",
+          updatedAt: tied,
+          ...(isVictim ? { workId: stale } : {}),
+        });
+      }
+    });
+
+    // Preconditions PRINTED into the assertion rather than assumed: verification's own first
+    // version of this fixture swept an extra row into the tie via a name prefix, and printing
+    // the shape is what caught it.
+    const before = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query("events")
+          .withIndex("by_state_updatedAt", (q) => q.eq("state", "delivering"))
+          .take(50)
+      ).map((event) => event.eventId),
+    );
+    expect({ count: before.length, victimIndex: before.indexOf("victim") }).toMatchObject({
+      count: 8,
+    });
+    expect(before.indexOf("victim")).toBeGreaterThan(3);
+
+    let cursor:
+      | Awaited<ReturnType<typeof t.mutation<typeof api.recovery.requeueStuck>>>["cursor"]
+      | undefined;
+    for (let pass = 0; pass < 10; pass += 1) {
+      const result = await t.mutation(api.recovery.requeueStuck, { limit: 3, cursor });
+      cursor = result.cursor;
+      if (!result.remaining) break;
+    }
+
+    expect(await stateOf(t, "victim")).toMatchObject({ tagged: true });
+  });
 });
