@@ -213,14 +213,54 @@ describe("adopting the component in an unrelated app", () => {
     });
   });
 
-  it("runs the host's maintenance job against both streams", async () => {
-    // Proves the cron wiring compiles and runs against real mounts — including that the
-    // cursor threading in `maintenance.ts` terminates rather than looping ten times.
+  it("runs the host's maintenance job against BOTH streams, not just the first", async () => {
+    // The previous version asserted only `resolves.toBeNull()`, which an empty `maintain()`
+    // satisfies — measured, along with four other mutants including "iterate productEvents
+    // alone". The reason every one of them lived is that the fixture gave the job NOTHING TO
+    // DO: delivered rows are kept for seven days, so a row delivered a moment ago is not
+    // eligible for the sweep and a cleanup that ran correctly and a cleanup that never ran are
+    // indistinguishable. Moving the clock past retention is what turns this into a test.
     acceptEverything();
     const t = setup();
-    await t.mutation(api.orders.place, { sku: "SKU-6", quantity: 1 });
+    await t.mutation(api.orders.place, { sku: "SKU-7", quantity: 1 });
     await t.finishAllScheduledFunctions(vi.runAllTimers);
 
+    const order = await t.run(async (ctx) => await ctx.db.query("orders").first());
+    const stillThere = async (name: "productEvents" | "auditEvents") =>
+      (await t.query(components[name].lib.getStatus, {
+        datasource: name === "productEvents" ? "orders" : "audit",
+        eventId: order!._id,
+      })) !== null;
+
+    // The precondition is asserted, not assumed: a sweep that removes nothing looks identical
+    // to a fixture that had nothing to remove.
+    expect(await stillThere("productEvents")).toBe(true);
+    expect(await stillThere("auditEvents")).toBe(true);
+
+    vi.setSystemTime(Date.now() + 8 * 24 * 60 * 60 * 1000);
     await expect(t.mutation(internal.maintenance.maintain, {})).resolves.toBeNull();
+
+    expect(await stillThere("productEvents")).toBe(false);
+    expect(await stillThere("auditEvents")).toBe(false);
+  });
+
+  it("reports each stream separately through the host's own health wrapper", async () => {
+    // `api.orders.health` is the operator-facing surface and had no coverage at all: a wrapper
+    // returning `productEvents.health()` for BOTH keys passed the whole suite, because the
+    // isolation test reads `components[name].lib.health` and bypasses the wrapper entirely.
+    // Pausing exactly one mount is what makes the two keys have to differ.
+    acceptEverything();
+    const t = setup();
+    await t.mutation(components.auditEvents.lib.pause, { actor: "operator" });
+    await t.mutation(api.orders.place, { sku: "SKU-8", quantity: 1 });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const health = await t.query(api.orders.health, {});
+    expect(health.product).toMatchObject({ paused: false });
+    expect(health.audit).toMatchObject({ paused: true });
+    // `delivered` is deliberately not a health count, so the paused stream's BACKLOG is what
+    // distinguishes the two keys: the audit event never left `pending`, the product one did.
+    expect(health.audit.counts.pending.count).toBe(1);
+    expect(health.product.counts.pending.count).toBe(0);
   });
 });

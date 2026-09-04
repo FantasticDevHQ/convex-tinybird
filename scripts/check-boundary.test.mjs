@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 
-import { checkBoundary } from "./check-boundary.mjs";
+import { checkBoundary, scanRootsFor } from "./check-boundary.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => join(here, "fixtures", name);
@@ -119,4 +120,26 @@ test("a pair of stray quotes cannot cancel and hide the code between them", () =
 
 test("the real package passes its own boundary", () => {
   assert.deepEqual(checkBoundary(packageRoot), []);
+});
+
+test("the example app is among the trees actually scanned", () => {
+  // Without this, renaming or deleting `example/convex` makes the gate skip it and pass in
+  // silence — a missing root is legitimately not a violation, because the fixtures are component
+  // trees with no example. That exemption is load-bearing for the fixtures and a blind spot for
+  // the real package, and nothing distinguished the two. This is the line that does.
+  const roots = scanRootsFor(join(here, ".."));
+  const example = roots.find((root) => root.label === "example/convex");
+  assert.ok(example, "example/convex must be a declared scan root");
+  assert.ok(existsSync(example.dir), `example root must exist on disk: ${example.dir}`);
+});
+
+test("component-only rules do not apply to the example, which is a host app", () => {
+  // `.paginate()` and `ctx.auth` are forbidden INSIDE the component and entirely legal in the
+  // app that mounts it. Applying them to the example made the gate reject a paginated dashboard
+  // query with the message "paginate() is only supported in the app" — fired on the app.
+  const roots = scanRootsFor(join(here, ".."));
+  const src = roots.find((root) => root.label === "src");
+  const example = roots.find((root) => root.label === "example/convex");
+  assert.ok(src.sourcePatterns.length > 0, "the component must still be subject to them");
+  assert.deepEqual(example.sourcePatterns, [], "the host app must not be");
 });

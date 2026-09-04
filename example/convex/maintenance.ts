@@ -21,8 +21,18 @@ const auditEvents = new TinybirdDelivery(components.auditEvents);
  * whole interval.
  *
  * The cursor is carried, not discarded. Every call without it restarts at the head of the scan,
- * and a page of work that is old but still healthy sits there permanently — so a loop that
- * drops the cursor makes no progress at all in the condition this exists for.
+ * and a page of work that is old but still HEALTHY sits there permanently — so a loop that drops
+ * the cursor makes no progress at all in the condition this exists for.
+ *
+ * That last claim is NOT proven by this app's tests, and it is worth saying so rather than
+ * leaving a comment that appears to vouch for one. Deleting `cursor = result.cursor` here leaves
+ * the example suite green, because requeued rows leave the scan range and progress continues
+ * without it; the cursor only becomes load-bearing when rows are scanned and NOT requeued, which
+ * this fixture has no way to build. It is pinned where it is real, against the component
+ * directly, in `src/component/cleanup.test.ts` — see the healthy-rows-occupy-the-window case.
+ *
+ * What this app's tests DO pin is that the job runs against every mounted stream and actually
+ * removes expired rows from each: iterating one stream, or iterating none, both fail.
  */
 export const maintain = internalMutation({
   args: {},

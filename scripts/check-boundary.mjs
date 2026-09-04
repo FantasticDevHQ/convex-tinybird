@@ -218,6 +218,41 @@ function escapesPackage(specifier, fileDir, packageRoot) {
 }
 
 /**
+ * The trees this gate reads, and which rules each one is subject to.
+ *
+ * Exported so the self-test can assert the example is actually among them. It was not checkable
+ * before: renaming `example/convex` made the gate skip it and pass, silently, because a missing
+ * root is legitimately not a violation for the fixtures. A gate that cannot say which trees it
+ * read cannot be trusted when it says they were clean.
+ */
+export function scanRootsFor(root) {
+  return [
+    // The component. Every rule applies here: this is the tree that gets bundled and pushed as
+    // a component, where the constructs below are dead code or a boundary break.
+    { label: "src", dir: join(root, "src"), sourcePatterns: FORBIDDEN_SOURCE_PATTERNS },
+
+    // The example is a HOST APP, and the source constructs forbidden inside a component are all
+    // perfectly legal in the app that mounts one. Applying them here produced an error message
+    // that contradicted itself — `paginate() is only supported in the app` fired ON the app —
+    // and it forbade writing the paginated dashboard query a consumer example most wants to
+    // show. Authorization is the same: a real host DOES call `ctx.auth` to guard its operator
+    // wrappers, which is exactly what the component refuses to do for it.
+    //
+    // So the example is scanned for IMPORTS only. That is the claim it exists to support: the
+    // component is portable, and the one app demonstrating it reaches for nothing a consumer
+    // outside this monorepo could not. It may import the component — that is the entire point —
+    // but nothing else under `@fantastic-dev/`, narrowed to this exact package rather than the
+    // scope so an example reaching for `@fantastic-dev/backend` still fails.
+    {
+      label: "example/convex",
+      dir: join(root, "example", "convex"),
+      selfImportAllowed: /^@fantastic-dev\/convex-tinybird(\/|$)/,
+      sourcePatterns: [],
+    },
+  ];
+}
+
+/**
  * Returns one human-readable failure per violation; an empty array means the package is clean.
  * Pure over the filesystem so the self-test can point it at fixtures.
  */
@@ -241,18 +276,8 @@ export function checkBoundary(packageRoot) {
   //
   // `_generated` is excluded by `sourceFiles`; the example's generated code is written by
   // Convex and is not ours to constrain.
-  const scanRoots = [
-    { label: "src", dir: join(root, "src") },
-    // The example may import the component — that is the entire point of it — but nothing
-    // else under `@fantastic-dev/`. Narrowed to this exact package rather than the scope, so
-    // an example that reached for `@fantastic-dev/backend` or the db package still fails.
-    {
-      label: "example/convex",
-      dir: join(root, "example", "convex"),
-      selfImportAllowed: /^@fantastic-dev\/convex-tinybird(\/|$)/,
-    },
-  ];
-  for (const { label, dir, selfImportAllowed } of scanRoots) {
+  const scanRoots = scanRootsFor(root);
+  for (const { label, dir, selfImportAllowed, sourcePatterns } of scanRoots) {
     // A root that does not exist is not a violation. The self-test's fixtures are component
     // trees with no example app, and treating their absence as a failure would make every
     // fixture fail for a reason none of them is about.
@@ -277,7 +302,7 @@ export function checkBoundary(packageRoot) {
         );
         continue;
       }
-      for (const { pattern, why } of FORBIDDEN_SOURCE_PATTERNS) {
+      for (const { pattern, why } of sourcePatterns) {
         if (pattern.test(code)) {
           failures.push(`${label}/${file}: forbidden construct ${pattern.source} — ${why}`);
         }
