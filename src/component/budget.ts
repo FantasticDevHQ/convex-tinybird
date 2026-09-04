@@ -111,13 +111,18 @@ export const PAYLOAD_ROW_OVERHEAD_BYTES = 192;
  * |---|---|---|---|---|
  * | read bytes | `TRANSACTION_MAX_READ_SIZE_BYTES` | 16 MiB | budgeted above | budgeted above |
  * | read-set intervals | `TRANSACTION_MAX_READ_SET_INTERVALS` | 4 096 | ~15% | ~73% |
- * | documents read | `TRANSACTION_MAX_READ_SIZE_ROWS` | 32 000 | ~2.5% | ~9% |
- * | writes | `TRANSACTION_MAX_NUM_USER_WRITES` | 16 000 | ~2.5% | ~13% |
+ * | documents read | `TRANSACTION_MAX_READ_SIZE_ROWS` | 32 000 | ~2.5% | ~12.5% |
+ * | writes | `TRANSACTION_MAX_NUM_USER_WRITES` | 16 000 | ~2.5% | ~12.5% |
  *
  * So the order is bytes, then INTERVALS at 4 096, then documents, then writes — and a reader
- * who checks documents finds thirtyfold headroom where the real headroom is about sixfold,
- * on a meter they did not look at. The figures are worst case (fallback path); intervals
- * merge when they overlap, so the real count is lower.
+ * who checks documents finds eightfold headroom where the real headroom is about sixfold, on
+ * a meter they did not look at.
+ *
+ * Every figure is the FALLBACK path, which is the worst case. That is worth stating because
+ * the first draft of this table quoted the pointer figure in one cell — 9% where the
+ * fallback is 12.5% — while claiming to be worst case throughout. A table whose whole
+ * purpose is to be trusted by the next person cannot mix its paths. Intervals merge when
+ * they overlap, so those counts are upper bounds.
  *
  * Note too that a delete charges its full document on the READ meter and nothing at all on
  * the write meter — `value_size` is `0` when `new_document` is `None`
