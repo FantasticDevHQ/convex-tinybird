@@ -11,11 +11,26 @@
  * generated tree. Internal functions are excluded because `component.ts` is the host-facing API
  * and does not list them — `lifecycle.ts` and `deliver.ts` appear nowhere in it, correctly. That is the failure that has actually happened, and the one nothing else sees.
  *
- * What it does NOT catch, stated so nobody assumes otherwise: a changed argument or return
- * validator on a function that is already listed. `tsc` covers that, and not by luck — the
- * client in `src/client/index.ts` consumes the generated component types, so a signature that
- * moves without regeneration is a type error there. That is how the `cursor` type change in
- * FTD-2500 surfaced. The two together are the gate; neither alone is.
+ * What it does NOT catch: a changed argument or return validator on a function already listed.
+ * `tsc` covers PART of that, and the part it misses was measured rather than guessed —
+ * verification drifted four validators with the tree otherwise clean:
+ *
+ * | drift | tsc | this gate |
+ * |---|---|---|
+ * | new REQUIRED arg on `vEnqueueArgs` | fails | passes |
+ * | `datasource` string -> number | fails | passes |
+ * | new OPTIONAL arg on `vEnqueueArgs` | **passes** | passes |
+ * | return union widened with a new literal | **passes** | passes |
+ *
+ * So NARROWING is caught and WIDENING is not, by either. A new optional argument and a wider
+ * return union are ordinary changes, and they leave the generated file stale with nothing
+ * complaining. An earlier version of this comment stated the whole class as covered, which was
+ * an overclaim of exactly the kind this package has shipped before — a bound that is true at
+ * the end you check and false at the end you do not.
+ *
+ * Closing it needs regeneration, which CI cannot do. Until then the honest mitigation is that
+ * regeneration is part of the local `check` command and its output is committed, so the drift
+ * window is one push rather than indefinite.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";

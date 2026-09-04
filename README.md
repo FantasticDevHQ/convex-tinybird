@@ -30,8 +30,13 @@ Three things it will fail on, each verified by deliberately breaking it:
 
 Codegen freshness compares the module and public-function SET rather than regenerating, because
 a component's `_generated` is written by pushing a host that mounts it and CI has no deployment.
-Signature drift is caught by `tsc` instead — the client consumes the generated component types,
-so a changed validator is a type error there.
+
+Signature drift is only **partly** covered, and it is worth knowing which part. `tsc` catches
+_narrowing_ changes — a new required argument, or a type that changes shape — because the client
+consumes the generated component types. It does **not** catch _widening_: a new optional
+argument, or a return union gaining a literal, leaves the generated file stale with nothing
+complaining. Regeneration is the only complete answer, and it is part of the local `check`
+command above rather than of CI.
 
 ## Status
 
