@@ -91,13 +91,15 @@ export const MAX_ERROR_HISTORY = 5;
  * in each, and `readHeartbeat` reads two more — the settings row and the oldest waiting
  * event, the latter being the same document the pending count reads first, which Convex
  * charges twice because it accumulates per read rather than per document. So the worst call
- * is `(3 x (cap + 1) + 2) x 5.4 KB` against Convex's roughly 8 MiB per-call budget:
+ * is `(3 x (cap + 1) + 2) x 5.4 KB` against Convex's roughly 8 MiB per-call budget.
+ * `healthcost.test.ts` pins the 29.4% figure below as well as the row size, so raising the
+ * cap has to come here even while it would still be safe:
  *
  * | cap | worst call | share of budget |
  * |---|---|---|
- * | 1000 | 15.5 MiB | 194% |
- * | 250 | 3.9 MiB | 49% |
- * | 150 | 2.3 MiB | 29% |
+ * | 1000 | 15.51 MiB | 193.9% |
+ * | 250 | 3.90 MiB | 48.7% |
+ * | 150 | 2.35 MiB | 29.4% |
  *
  * That shape is a UNION of every field's maximum, deliberately including combinations the
  * state machine cannot produce — `deliveredAt` is only ever written alongside

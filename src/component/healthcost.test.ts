@@ -20,8 +20,21 @@ installComponentTestHooks();
  */
 const READ_BUDGET_BYTES = 8 * 1024 * 1024;
 
-/** The fraction of that budget `health`'s worst case is allowed to occupy. */
+/** The ceiling: the fraction of the budget `health`'s worst case may ever occupy. */
 const BUDGET_SHARE = 0.35;
+
+/**
+ * The share it actually occupies, as documented on `COUNT_CAP`.
+ *
+ * Pinned separately from the ceiling because the two say different things. The ceiling is a
+ * safety bound with deliberate headroom, so it does not notice a change that stays inside
+ * it: at 29.4% actual against a 35% ceiling the cap could be raised from 150 to about 178
+ * in silence, and verification measured that slack at an earlier stage too. This pins the
+ * combination of cap and row against the number the docblock publishes, so either moving
+ * has to come here.
+ */
+const DOCUMENTED_SHARE = 0.294;
+const SHARE_TOLERANCE = 0.002;
 
 /**
  * The measured size of the largest event the contract permits.
@@ -32,16 +45,31 @@ const BUDGET_SHARE = 0.35;
  * the ceiling bit. Pinning the row size instead means anything that changes what a row costs
  * has to come here and update the number, which is where the arithmetic lives.
  *
- * Exact, not a band. An earlier version allowed a tolerance on the theory that
- * `_creationTime` varies between runs; it does not. `installComponentTestHooks` freezes the
- * clock with `vi.useFakeTimers()`, and convex-test only bumps a creation time when a second
- * insert collides with the first — the events row is inserted before its payload row, so it
- * takes the unbumped value. Measured identical across five runs. The band was also not
- * merely redundant: at three percent it swallowed a 128-byte bound change, which is the
- * failure it existed to catch, and even at half a percent it would have absorbed the 42
- * bytes of unmaximal fields that verification found. An exact number cannot.
+ * Pinned to within a single documented step, not a percentage band. An earlier version
+ * allowed 3% and then 0.5% on the theory that `_creationTime` varies between runs. It does
+ * not: `installComponentTestHooks` freezes the clock, and convex-test computes
+ * `_creationTime = now <= last ? last + 0.001 : now`, so the value takes one of exactly TWO
+ * lengths — 13 characters for the unbumped integer, 17 for a bumped one — decided by insert
+ * order rather than by chance. Measured identical across five runs here, and across 16,000
+ * samples spanning a year of clock values in independent verification.
+ *
+ * So the hazard is not noise, it is a STEP. `seedEvent` inserts the event before its payload
+ * row, so the event takes the integer; if that order ever changed, the row would jump four
+ * bytes and a bare equality would red with a message nobody could trace back to insert
+ * order. {@link CREATION_TIME_STEP_BYTES} absorbs exactly that and nothing else.
+ *
+ * The percentage bands it replaces were not merely loose. At 3% one swallowed a 128-byte
+ * bound change, which is the failure the ratchet exists to catch, and at 0.5% one would
+ * still have absorbed the 42 bytes of unmaximal fields verification found.
  */
 const WORST_CASE_ROW_BYTES = 5412;
+
+/**
+ * The only variation the measurement can legitimately show: `_creationTime` rendering as a
+ * bumped 17-character value instead of an unbumped 13-character one, which depends on the
+ * order of the inserts in `seedEvent` rather than on anything about the row's contents.
+ */
+const CREATION_TIME_STEP_BYTES = 4;
 
 /** `health` counts three states, each reading one row past the cap. */
 const STATES_COUNTED = 3;
@@ -156,10 +184,16 @@ describe("what a full health call costs", () => {
     // A ratchet on the row itself. Anything that changes what an event costs — a new field,
     // a wider cap, a different fill — lands here and has to update the recorded number,
     // which is the same place the docblock's arithmetic is written.
-    expect(rowBytes).toBe(WORST_CASE_ROW_BYTES);
+    expect(Math.abs(rowBytes - WORST_CASE_ROW_BYTES)).toBeLessThanOrEqual(CREATION_TIME_STEP_BYTES);
 
-    // And a ceiling on the call, which is what the cap is chosen to satisfy.
     const worstCase = (STATES_COUNTED * (COUNT_CAP + 1) + HEARTBEAT_DOCUMENTS) * rowBytes;
-    expect(worstCase).toBeLessThan(READ_BUDGET_BYTES * BUDGET_SHARE);
+    const share = worstCase / READ_BUDGET_BYTES;
+
+    // The published figure, so raising the cap has to come here even while it stays safe.
+    expect(share).toBeGreaterThan(DOCUMENTED_SHARE - SHARE_TOLERANCE);
+    expect(share).toBeLessThan(DOCUMENTED_SHARE + SHARE_TOLERANCE);
+
+    // And the ceiling, which is the safety claim rather than the change detector.
+    expect(share).toBeLessThan(BUDGET_SHARE);
   });
 });
