@@ -452,4 +452,43 @@ describe("requeueing work that stopped moving", () => {
     expect(result).toMatchObject({ requeued: 1, remaining: true });
     expect(await stateOf(t, "p1")).toMatchObject({ tagged: false });
   });
+
+  it("rescues past a pointer the pool cannot parse, instead of failing wholesale", async () => {
+    // One unparseable `workId` used to disable the entire recovery path, permanently.
+    // `statusBatch` takes `v.array(v.id("work"))` while the schema declares `v.string()`, and
+    // argument validation runs BEFORE the handler — so the throw is not something the loop can
+    // step over. Every cron run failed, nothing was rescued, and the healthy abandoned row
+    // beside the bad one waited for ever.
+    //
+    // Verification reproduced that on a real deployment with a control, having first hit it by
+    // accident on its own seeded rows. `scheduleDelivery` is the only writer today, but a
+    // `convex import`, a restored snapshot or a manual repair all produce one.
+    const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await parked(t, "healthy", { state: "delivering", ageMs: 30 * MINUTE, settled: true });
+    await parked(t, "poisoned", { state: "delivering", ageMs: 31 * MINUTE, settled: true });
+    await t.run(async (ctx) => {
+      const event = await ctx.db
+        .query("events")
+        .withIndex("by_identity", (q) => q.eq("datasource", "events").eq("eventId", "poisoned"))
+        .unique();
+      await ctx.db.patch(event!._id, { workId: "legacy-pointer" });
+    });
+
+    // Does not throw, and the healthy row is rescued rather than blocked by its neighbour.
+    const result = await t.mutation(api.recovery.requeueStuck, {});
+    expect(result.requeued).toBe(2);
+    expect(await stateOf(t, "healthy")).toMatchObject({ tagged: true });
+
+    // And the bad pointer is cleared, so the condition heals instead of recurring — with the
+    // value named on the row, because something wrote to this table that should not have.
+    const poisoned = await t.run(async (ctx) =>
+      ctx.db
+        .query("events")
+        .withIndex("by_identity", (q) => q.eq("datasource", "events").eq("eventId", "poisoned"))
+        .unique(),
+    );
+    expect(poisoned?.lastError?.message).toContain("legacy-pointer");
+  });
 });

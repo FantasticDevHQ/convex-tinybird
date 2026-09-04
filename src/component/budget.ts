@@ -227,8 +227,16 @@ export const MAX_ORPHAN_SCAN_LIMIT = 20;
  *   a backlog of roughly 160 events puts the tail past ten minutes while every item is queued
  *   and healthy — and requeueing the tail enqueues more work, lengthening the queue.
  *
- * So ten minutes is now only "long enough that asking is cheap and not worth doing sooner".
- * Being wrong about it costs a wasted status lookup rather than a duplicate delivery.
+ * So ten minutes is mostly "long enough that asking is cheap and not worth doing sooner", and
+ * being wrong about it usually costs a wasted status lookup rather than a duplicate delivery.
+ *
+ * ONE race is still decided by it, and the exception is worth naming rather than leaving the
+ * flat claim to be discovered as false. If an item exhausts its retries and this call rescues
+ * the row before `onDeliveryComplete` runs, that completion is refused by the pointer guard —
+ * correctly, since the pointer has moved — and its `failed` verdict is dropped, so the event
+ * gets a fresh retry budget instead of becoming a dead letter. What keeps that off the table
+ * is `markAttemptFailed` refreshing `updatedAt` on the final attempt: the row is seconds old
+ * and this cutoff excludes it. Shorten the threshold far enough and age stops covering it.
  */
 export const DEFAULT_STUCK_AFTER_MS = 10 * 60 * 1000;
 
@@ -258,6 +266,14 @@ export const DEFAULT_STUCK_AFTER_MS = 10 * 60 * 1000;
  * {@link SWEEP_READ_BUDGET_BYTES}. A hundred would be 74%, which does not fail but leaves
  * none of the headroom the number was chosen to express, and the budget is spent across BOTH
  * scans so a saturated page costs the same whether or not anything is rescued.
+ *
+ * The THROUGHPUT this buys is worth stating separately, because the first scan is capped at
+ * half the budget so that it cannot starve the second. A page that is entirely `delivering`
+ * therefore rescues 25, not 50; only a page with work of both kinds rescues the full 50. So
+ * the README's ten-pass loop drains at most 250 crashed deliveries per cron run, and a host
+ * recovering from a large incident should raise `limit` rather than assume the default keeps
+ * up. Verification measured the same halving at the previous value: 100 abandoned delivering
+ * rows, default limit, `requeued: 50`.
  *
  * The status lookup is batched — one `pool.statusBatch` per page rather than a call per row —
  * because a per-row cost nobody counted is the mistake this package has made most often.

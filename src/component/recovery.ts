@@ -5,6 +5,7 @@ import { DEFAULT_STUCK_AFTER_MS, DEFAULT_STUCK_LIMIT } from "./budget";
 import { boundedBatch } from "./contract";
 import { type WorkId, pool } from "./pool";
 import { patchSettings, pushHistory, recordActor, scheduleDelivery } from "./state";
+import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 
 /**
@@ -15,6 +16,63 @@ import type { MutationCtx } from "./_generated/server";
  * the only place in the component that reasons about the Workpool's own state rather than its
  * callbacks.
  */
+
+/**
+ * Which of these rows' work items are still going.
+ *
+ * Batched, with a per-row fallback that exists for one reason: **a single unparseable pointer
+ * otherwise disables the entire recovery path, permanently.** `statusBatch` takes
+ * `v.array(v.id("work"))` and this component's schema declares `workId: v.string()`, so the
+ * schema permits values the consumer rejects — and argument validation happens BEFORE the
+ * handler, so the throw is not something the loop can step over. Every cron run fails, no row
+ * is rescued, and the healthy abandoned row sitting beside the bad one waits for ever.
+ *
+ * That is the wedge shape, on the surface that exists to be the last line of recovery.
+ * Verification reproduced it on a real deployment with a control, having first hit it by
+ * accident on its own seeded rows. Today `scheduleDelivery` is the only writer, so a live
+ * deployment should not contain one — but a `convex import`, a restored snapshot or a manual
+ * repair all produce it, and "should not happen" is a poor guard for a total failure.
+ *
+ * An unparseable pointer is treated as NOT live, which rescues the row and clears the pointer,
+ * so the condition heals rather than recurring. It is not swallowed: the row is tagged with a
+ * message naming the value, because a pointer the pool cannot parse means something wrote to
+ * this table that should not have, and that is worth an operator seeing.
+ *
+ * The fallback's per-row cost is paid only when a page actually contains a bad pointer.
+ */
+async function liveWorkIds(
+  ctx: MutationCtx,
+  scheduled: Doc<"events">[],
+): Promise<{ alive: Set<string>; unparseable: Set<string> }> {
+  const alive = new Set<string>();
+  const unparseable = new Set<string>();
+  if (scheduled.length === 0) return { alive, unparseable };
+
+  try {
+    const statuses = await pool.statusBatch(
+      ctx,
+      scheduled.map((event) => event.workId as WorkId),
+    );
+    scheduled.forEach((event, index) => {
+      // Anything that is not `finished` is alive — queued in the pool or running. Leave it
+      // alone; it will advance on its own, and a second item would not help.
+      if (statuses[index]?.state !== "finished") alive.add(event.workId as string);
+    });
+    return { alive, unparseable };
+  } catch {
+    // The batch is all-or-nothing, so one bad value costs the verdict for the whole page.
+    // Ask again row by row to find out which, and to keep the rest of the page working.
+    for (const event of scheduled) {
+      try {
+        const status = await pool.status(ctx, event.workId as WorkId);
+        if (status.state !== "finished") alive.add(event.workId as string);
+      } catch {
+        unparseable.add(event.workId as string);
+      }
+    }
+    return { alive, unparseable };
+  }
+}
 
 /**
  * Returns one page of ABANDONED rows to `pending` and puts them back on the pool.
@@ -93,23 +151,11 @@ export async function requeueAbandoned(
   // One status call for the whole page. Asking per row would put a component call inside the
   // loop, which is the cost shape this package has repeatedly got wrong.
   const scheduled = selected.filter((event) => event.workId !== undefined);
-  const statuses =
-    scheduled.length === 0
-      ? []
-      : await pool.statusBatch(
-          ctx,
-          scheduled.map((event) => event.workId as WorkId),
-        );
-  const stillWorking = new Set<string>();
-  scheduled.forEach((event, index) => {
-    // Anything that is not `finished` is alive — `pending` in the pool's queue or `running`.
-    // Leave it alone; it will advance on its own, and a second item would not help.
-    if (statuses[index]?.state !== "finished") stillWorking.add(event.workId as string);
-  });
+  const { alive, unparseable } = await liveWorkIds(ctx, scheduled);
 
   let requeued = 0;
   for (const event of selected) {
-    if (event.workId !== undefined && stillWorking.has(event.workId)) continue;
+    if (event.workId !== undefined && alive.has(event.workId)) continue;
 
     // A pending row with NO pointer was never delivering, so nothing about it went wrong. It
     // is simply unscheduled — waiting for `resume`, or for an append token — and that is
@@ -135,7 +181,10 @@ export async function requeueAbandoned(
       updatedAt: Date.now(),
       lastError: {
         category: "stuck" as const,
-        message: `No progress for ${Math.round((Date.now() - event.updatedAt) / 60000)} minutes`,
+        message:
+          event.workId !== undefined && unparseable.has(event.workId)
+            ? `Work pointer ${event.workId} is not a valid work id; clearing it`
+            : `No progress for ${Math.round((Date.now() - event.updatedAt) / 60000)} minutes`,
         at: Date.now(),
       },
       // The failure that was on the row is PRESERVED, like every other transition here.
