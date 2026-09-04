@@ -543,7 +543,16 @@ export const requeueStuck = mutation({
 
     // One budget across both scans, not one each — the same rule `cleanup` follows, so that a
     // caller passing `limit: 3` bounds the transaction rather than authorising six rescues.
-    const crashed = await requeueAbandoned(ctx, "delivering", cutoff, budget);
+    //
+    // But the first scan gets at most HALF, so it cannot starve the second. Rows skipped for
+    // being alive still consume the budget — they had to be read to be judged — so a
+    // saturated pool produces a full page of old `delivering` rows that are all healthy, on
+    // every call, for ever. Spending the whole budget there would mean the `pending` scan
+    // never runs and a stranded row behind it is never found: not slow, never. Half is the
+    // crudest split that makes that impossible, and whatever the first scan leaves unspent
+    // still passes to the second, so the common case where there is little to do is unchanged.
+    const share = Math.ceil(budget / 2);
+    const crashed = await requeueAbandoned(ctx, "delivering", cutoff, share);
     const stranded = await requeueAbandoned(ctx, "pending", cutoff, budget - crashed.visited);
 
     return {

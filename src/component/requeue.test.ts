@@ -52,7 +52,18 @@ async function parked(
   // afterwards is the only way to build the row this ticket is about: `workId` present,
   // work item finished. Without this the fixture produces a row with no pointer at all, which
   // `resume` can already see, so the test asserts nothing about the defect.
-  const workId = await t.run(async (ctx) => (await ctx.db.query("events").first())?.workId);
+  // Looked up BY IDENTITY, not `.first()`. With more than one event in the table `.first()`
+  // returns the earliest, so every row after the first was handed the first row's pointer —
+  // a fixture that quietly builds the wrong thing and still passes.
+  const workId = await t.run(
+    async (ctx) =>
+      (
+        await ctx.db
+          .query("events")
+          .withIndex("by_identity", (q) => q.eq("datasource", "events").eq("eventId", id))
+          .unique()
+      )?.workId,
+  );
   if (opts.settled) await drain(t);
   await t.run(async (ctx) => {
     const event = await ctx.db
@@ -244,5 +255,28 @@ describe("requeueing work that stopped moving", () => {
       );
     }
     expect(await stateOf(t, "live")).toMatchObject({ state: "delivering" });
+  });
+
+  it("cannot let a saturated delivering scan starve the pending scan", async () => {
+    // Rows skipped for being alive still consume the budget — they had to be read to be
+    // judged — so a saturated pool yields a full page of old, healthy `delivering` rows on
+    // every call. If the first scan could spend the whole budget there, the `pending` scan
+    // would never run and a stranded row behind it would never be found. Not slow: never.
+    //
+    // Four live delivering rows against a limit of 2, plus one genuinely stranded pending
+    // row. Without the half share the delivering scan consumes both and the rescue is 0.
+    const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    // The settled row FIRST. `parked(settled: true)` drains, and a drain finishes every queued
+    // item — so seeding it last would settle the four "live" rows too and the fixture would
+    // be testing nothing it claims to.
+    await parked(t, "behind", { state: "pending", ageMs: 30 * MINUTE, settled: true });
+    for (let i = 0; i < 4; i += 1) {
+      await parked(t, `busy-${i}`, { state: "delivering", ageMs: 30 * MINUTE, settled: false });
+    }
+
+    expect(await t.mutation(api.lib.requeueStuck, { limit: 2 })).toMatchObject({ requeued: 1 });
+    expect(await stateOf(t, "behind")).toMatchObject({ tagged: true });
   });
 });
