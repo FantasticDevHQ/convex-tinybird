@@ -287,6 +287,52 @@ describe("the payload lives outside the counted row", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
 
+  it("schedules a repaired event that was waiting with no worker", async () => {
+    // The other half of the requeue guard, and the half that says "this one DOES need
+    // scheduling". A `pending` row with no work item is waiting for someone to start it, and
+    // repair has to start it — otherwise the payload comes back and the event still sits
+    // there until an operator happens to run `resume`, which is stranding in a quieter form.
+    //
+    // The fixture has to leave NOTHING in the pool, which is what makes it discriminate. My
+    // first version enqueued normally and then cleared `workId` by hand: the original work
+    // item was still queued, so the drain delivered the event whether or not repair had
+    // scheduled anything, and dropping the clause left the suite green. Enqueueing while
+    // paused is what produces a genuinely unscheduled row; the pause is then lifted directly
+    // rather than through `resume`, because `resume` would schedule it itself and mask the
+    // very thing under test.
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await t.mutation(api.lib.pause, { actor: "operator_1" });
+    await enqueueOne(t);
+    // Nothing queued: a paused instance stores without scheduling, so the pool is empty and
+    // the drain below can only deliver something repair itself scheduled.
+    const queued = await t.run(async (ctx) => {
+      // eslint-disable-next-line @convex-dev/no-collect-in-query
+      const events = await ctx.db.query("events").collect();
+      return {
+        total: events.length,
+        withWork: events.filter((event) => event.workId !== undefined).length,
+      };
+    });
+    expect(queued).toEqual({ total: 1, withWork: 0 });
+
+    await t.run(async (ctx) => {
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+      const settings = await ctx.db.query("settings").first();
+      await ctx.db.patch(settings!._id, { paused: false, pausedReason: undefined });
+    });
+
+    expect(await enqueueOne(t)).toMatchObject({ outcome: "repaired", state: "pending" });
+    await drain(t);
+
+    // Delivered without anyone calling `resume`. Without the clause the payload comes back
+    // and nothing ever starts the event.
+    expect(await statusOf(t)).toMatchObject({ state: "delivered" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("restores the payload of an in-flight event without disturbing it", async () => {
     // The third state a repair can find, and the one that must NOT be requeued: a
     // `delivering` row is mid-attempt by definition, so returning it to `pending` would be
