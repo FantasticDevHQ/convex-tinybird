@@ -1,6 +1,7 @@
 import { installComponentTestHooks, seedEvent, setup } from "../testing/fixtures";
 import {
   COUNT_CAP,
+  DEFAULT_ORPHAN_SCAN_LIMIT,
   HARD_MAX_PAYLOAD_BYTES,
   MAX_DATASOURCE_NAME_LENGTH,
   MAX_ERROR_HISTORY,
@@ -96,7 +97,7 @@ const HEARTBEAT_DOCUMENTS = 2;
  * precisely what a sustained outage produces, so the worst case and the case an operator
  * reaches for `health` in are the same case.
  */
-async function measureWorstCaseRow(): Promise<number> {
+async function measureWorstCaseRow(): Promise<{ event: number; payload: number }> {
   const t = setup("");
   // Every length cap in this contract counts UTF-16 code units, but Convex sizes a string
   // by its UTF-8 bytes. So the most expensive string a cap admits is not ASCII: a BMP
@@ -179,7 +180,21 @@ async function measureWorstCaseRow(): Promise<number> {
   // where Convex spends one, and a comma between fields where Convex spends none; strings
   // cost the same either way. Independently reconstructed against this exact fixture, the
   // two come to 2462 and 2370 — so this over-states by about 4%.
-  return Buffer.byteLength(JSON.stringify(row), "utf8");
+  // The payload row is measured from the same fixture rather than a second one, so the two
+  // numbers are guaranteed to describe the SAME event. `reclaimOrphanedPayloads` reads both
+  // per scanned row, and a pair measured from separate seeds could silently drift apart.
+  //
+  // Note the fill here is ASCII while the event row's is CJK, and that is not an oversight:
+  // `HARD_MAX_PAYLOAD_BYTES` is a BYTE bound, so one ASCII character is exactly one byte of
+  // it and the string is already maximal. The event row's caps count UTF-16 code units,
+  // where ASCII buys a third of the bytes the cap admits.
+  const stored = await t.run(async (ctx) => ctx.db.query("payloads").first());
+  expect(Buffer.byteLength(stored?.payload ?? "", "utf8")).toBe(HARD_MAX_PAYLOAD_BYTES);
+
+  return {
+    event: Buffer.byteLength(JSON.stringify(row), "utf8"),
+    payload: Buffer.byteLength(JSON.stringify(stored), "utf8"),
+  };
 }
 
 describe("what a full health call costs", () => {
@@ -187,7 +202,7 @@ describe("what a full health call costs", () => {
     // convex-test enforces neither the document nor the byte limit, so nothing here can
     // observe the failure this guards against. What it CAN do is keep the arithmetic honest,
     // and that takes two assertions rather than one.
-    const rowBytes = await measureWorstCaseRow();
+    const rowBytes = (await measureWorstCaseRow()).event;
 
     // A ratchet on the row itself. Anything that changes what an event costs — a new field,
     // a wider cap, a different fill — lands here and has to update the recorded number,
@@ -203,5 +218,30 @@ describe("what a full health call costs", () => {
 
     // And the ceiling, which is the safety claim rather than the change detector.
     expect(share).toBeLessThan(BUDGET_SHARE);
+  });
+});
+
+describe("what a full orphan scan costs", () => {
+  it("fits DEFAULT_ORPHAN_SCAN_LIMIT rows in the budget, and one more would not", async () => {
+    const rows = await measureWorstCaseRow();
+
+    // The cost the old docblock missed entirely. `sweepOrphanedPayloads` reads the payload
+    // row AND then `ctx.db.get(stored.eventId)` to decide whether it is an orphan, so the
+    // per-row cost is both documents. The old comment said "the byte cost is the payload
+    // size and not the row count", which is only true at the hard cap; at a 1 KiB payload
+    // the EVENT row is five times the payload and dominates completely.
+    const perScannedRow = rows.payload + rows.event;
+
+    const budget = READ_BUDGET_BYTES * BUDGET_SHARE;
+    const atDefault = DEFAULT_ORPHAN_SCAN_LIMIT * perScannedRow;
+
+    // The safety claim.
+    expect(atDefault).toBeLessThan(budget);
+
+    // And the tightness claim, which is what makes this a change detector rather than a
+    // bound with slack to drift inside. Five is not merely safe, it is the LARGEST safe
+    // default: a sixth row crosses the ceiling. So raising the default, widening the hard
+    // payload cap, or adding a field to either row all land here.
+    expect((DEFAULT_ORPHAN_SCAN_LIMIT + 1) * perScannedRow).toBeGreaterThan(budget);
   });
 });

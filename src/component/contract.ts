@@ -112,22 +112,29 @@ export const DEFAULT_CLEANUP_LIMIT = 200;
 /**
  * How many payload rows one `reclaimOrphanedPayloads` call examines.
  *
- * Small where the retention limit is large, and for the opposite reason. Finding an orphan
- * means READING payload rows, whose size a host controls up to
- * {@link HARD_MAX_PAYLOAD_BYTES}, so the byte cost is the payload size and not the row
- * count. Against roughly 8 MiB per call at a 35% share:
+ * Small where the retention limit is large, and for the opposite reason. Deciding whether a
+ * payload is an orphan costs TWO documents, not one: the payload row is read by the scan,
+ * and then `ctx.db.get(stored.eventId)` reads the whole event to see whether it still
+ * exists. Against roughly 8 MiB per call at a 35% share, with the event row measured at
+ * 5 459 bytes by `healthcost.test.ts` and about 134 bytes of payload-row overhead:
  *
- * | payload bound | rows that fit |
- * |---|---|
- * | 1 KiB | ~950 |
- * | 64 KiB (default) | ~43 |
- * | 512 KiB (hard cap) | ~5 |
+ * | payload bound | cost per scanned row | rows that fit |
+ * |---|---|---|
+ * | 1 KiB | ~6.6 KiB | ~440 |
+ * | 64 KiB (default) | ~69 KiB | ~41 |
+ * | 512 KiB (hard cap) | ~517 KiB | 5 |
  *
- * Five, so the default is safe for ANY payload size a host may configure. An earlier value
- * of 25 was justified in exactly the opposite direction — the docblock claimed 25 rows was
- * "about 13 MB, sized to stay inside one transaction", when 13 MB is 156% of the budget the
- * rest of this component is sized against. It was safe at the default bound and unsafe at
- * the one the sentence named.
+ * Five, so the default is safe for ANY payload size a host may configure — and it is the
+ * LARGEST value that is, since a sixth row at the hard cap crosses the ceiling. Both halves
+ * are asserted, so this number cannot drift in either direction in silence.
+ *
+ * Two earlier versions of this docblock were wrong in opposite ways, which is why the
+ * arithmetic now lives in a test rather than only in prose. The first justified 25 rows as
+ * "about 13 MB, sized to stay inside one transaction" — 13 MB being 156% of the budget the
+ * rest of this component is sized against. The second corrected the value but still counted
+ * only the payload, claiming "the byte cost is the payload size and not the row count".
+ * That is true at the hard cap and badly false below it: at 1 KiB the event row is five
+ * times the payload and dominates the scan completely.
  *
  * A host whose events are small should pass a much larger `limit`; the scan is paginated, so
  * the cost of a small default is more calls rather than an unreachable table.
