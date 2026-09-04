@@ -251,12 +251,18 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           actor?: string;
-          cursor?: { delivering: number | null; pending: number | null };
+          cursor?: {
+            delivering: { creationTime: number; updatedAt: number } | null;
+            pending: { creationTime: number; updatedAt: number } | null;
+          };
           limit?: number;
           olderThanMs?: number;
         },
         {
-          cursor: { delivering: number | null; pending: number | null };
+          cursor: {
+            delivering: { creationTime: number; updatedAt: number } | null;
+            pending: { creationTime: number; updatedAt: number } | null;
+          };
           remaining: boolean;
           requeued: number;
         },

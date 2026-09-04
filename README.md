@@ -161,9 +161,15 @@ export const sweep = internalMutation({
     // Rescue first, sweep second. A row that has stopped moving is returned to `pending`
     // and is outside retention either way, so the ordering costs nothing — but the reverse
     // leaves a stuck row unexamined for a whole interval.
+    // `cursor` must be carried, not discarded. Every call without it restarts at the head of
+    // the scan, and a page of work that is old but still healthy sits there permanently —
+    // those rows are skipped rather than patched, so their age never moves. A loop that drops
+    // the cursor makes no progress at all in the condition this function exists for.
+    let cursor;
     for (let pass = 0; pass < 10; pass += 1) {
-      const { remaining } = await tinybird.requeueStuck(ctx, { actor: "nightly cron" });
-      if (!remaining) break;
+      const result = await tinybird.requeueStuck(ctx, { actor: "nightly cron", cursor });
+      cursor = result.cursor;
+      if (!result.remaining) break;
     }
 
     // Bounded, like every loop against this component. The limit is spent ONCE across both

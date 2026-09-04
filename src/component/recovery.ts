@@ -6,6 +6,16 @@ import { boundedBatch } from "./contract";
 import { type WorkId, pool } from "./pool";
 import { patchSettings, pushHistory, recordActor, scheduleDelivery } from "./state";
 import type { Doc } from "./_generated/dataModel";
+
+/**
+ * Where a scan stopped.
+ *
+ * A pair, because `updatedAt` alone cannot express "resume after this row": the index's second
+ * column is not unique, and a strict inequality on it jumps whatever else shares the value.
+ * `_creationTime` is the index's own tiebreaker within equal `updatedAt`, so the pair is a
+ * total order over the range being walked.
+ */
+type ScanCursor = { updatedAt: number; creationTime: number };
 import type { MutationCtx } from "./_generated/server";
 
 /**
@@ -115,8 +125,8 @@ export async function requeueAbandoned(
   state: "delivering" | "pending",
   cutoff: number,
   batch: number,
-  after: number | null,
-): Promise<{ requeued: number; visited: number; more: boolean; cursor: number | null }> {
+  after: ScanCursor | null,
+): Promise<{ requeued: number; visited: number; more: boolean; cursor: ScanCursor | null }> {
   // A cost guard, not a behaviour, and deliberately NOT pinned by a test. Removing it changes
   // nothing observable — `take(0 + 1)` followed by `slice(0, 0)` selects no rows and still
   // reports `more: true` — so its whole effect is one avoided document read. Verification
@@ -141,12 +151,30 @@ export async function requeueAbandoned(
       // Verification demonstrated it on a real deployment against the previous revision: one
       // abandoned row behind three live rows older than it was never rescued across ten
       // passes, and became rescuable when the only change was making the live rows younger.
+      // `gte`, not `gt`, because `updatedAt` is not unique. Convex freezes `Date.now()` for a
+      // transaction, so a host enqueuing a batch gives every row an identical value — and so
+      // does this function to every row it rescues in one call. A strict `gt` on the last
+      // value seen therefore jumps the REST of a tied group, and if the leading members are
+      // live and never patched the group never shrinks, so every later run repeats the jump
+      // identically. Verification demonstrated it: six tied rows, the abandoned one fourth,
+      // never reached; the same fixture with distinct timestamps rescued it on pass one.
+      //
+      // The tie is then broken in memory against `_creationTime`, which the index orders by
+      // within equal `updatedAt`, so a row is neither skipped nor handled twice.
       return after === null
         ? base.lt("updatedAt", cutoff)
-        : base.gt("updatedAt", after).lt("updatedAt", cutoff);
+        : base.gte("updatedAt", after.updatedAt).lt("updatedAt", cutoff);
     })
     .take(batch + 1);
-  const selected = found.slice(0, batch);
+  const fresh =
+    after === null
+      ? found
+      : found.filter(
+          (event) =>
+            event.updatedAt > after.updatedAt ||
+            (event.updatedAt === after.updatedAt && event._creationTime > after.creationTime),
+        );
+  const selected = fresh.slice(0, batch);
 
   // One status call for the whole page. Asking per row would put a component call inside the
   // loop, which is the cost shape this package has repeatedly got wrong.
@@ -205,14 +233,26 @@ export async function requeueAbandoned(
   // Computed from the UNFILTERED page, so a page full of live work still reports that more
   // rows are waiting rather than telling the host to stop.
   const more = found.length > selected.length;
+  // The last row SELECTED, not the last row read. `take(batch + 1)` reads a sentinel to learn
+  // whether more exists, and that row is not processed — advancing to it steps straight over
+  // it, which is how the first version of this cursor skipped the very row it was reaching
+  // for: the fixture's abandoned row was the sentinel on pass one and the cursor jumped past
+  // it on pass two.
+  //
+  // The fallback to the last row read covers the one case where nothing was selected: a tied
+  // group larger than a page, where every row was dropped by the tie-break. There, stepping
+  // over what was read is the only way to make progress.
+  const last = selected.at(-1) ?? found.at(-1);
   return {
     requeued,
     visited: selected.length,
     more,
-    // Carried forward only while the page was full. A short page means the end of the range,
-    // and returning null there restarts the next pass at the beginning — which is what makes
+    // Null on a short page, so the next pass restarts at the beginning — which is what makes
     // rows skipped for being alive get looked at again once their work has finished.
-    cursor: more ? (selected.at(-1)?.updatedAt ?? after) : null,
+    cursor:
+      more && last !== undefined
+        ? { updatedAt: last.updatedAt, creationTime: last._creationTime }
+        : null,
   };
 }
 
@@ -240,10 +280,14 @@ export const requeueStuck = mutation({
     olderThanMs: v.optional(v.number()),
     limit: v.optional(v.number()),
     actor: v.optional(v.string()),
+    /** Opaque: pass back exactly what the previous call returned. */
     cursor: v.optional(
       v.object({
-        delivering: v.union(v.number(), v.null()),
-        pending: v.union(v.number(), v.null()),
+        delivering: v.union(
+          v.object({ updatedAt: v.number(), creationTime: v.number() }),
+          v.null(),
+        ),
+        pending: v.union(v.object({ updatedAt: v.number(), creationTime: v.number() }), v.null()),
       }),
     ),
   },
@@ -251,8 +295,8 @@ export const requeueStuck = mutation({
     requeued: v.number(),
     remaining: v.boolean(),
     cursor: v.object({
-      delivering: v.union(v.number(), v.null()),
-      pending: v.union(v.number(), v.null()),
+      delivering: v.union(v.object({ updatedAt: v.number(), creationTime: v.number() }), v.null()),
+      pending: v.union(v.object({ updatedAt: v.number(), creationTime: v.number() }), v.null()),
     }),
   }),
   handler: async (ctx, args) => {

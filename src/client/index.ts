@@ -7,6 +7,18 @@
 import type { GenericDataModel, GenericMutationCtx, GenericQueryCtx } from "convex/server";
 
 import type { ComponentApi } from "../component/_generated/component";
+
+/**
+ * Where the last `requeueStuck` call stopped. Opaque — pass back exactly what you were given.
+ *
+ * A pair per scan rather than a timestamp, because `updatedAt` is not unique: Convex freezes
+ * `Date.now()` for a transaction, so a batch of rows written together share one value and a
+ * strict inequality on it would jump the rest of the group.
+ */
+export type RequeueCursor = {
+  delivering: { updatedAt: number; creationTime: number } | null;
+  pending: { updatedAt: number; creationTime: number } | null;
+};
 import {
   type EnqueueResult,
   type EventIdentity,
@@ -232,6 +244,12 @@ export class TinybirdDelivery {
    * row `delivering` with nothing watching it — it counts as unfinished in `health` for ever
    * and the backlog never drains.
    *
+   * **Carry `cursor` forward while `remaining` is true**, exactly as returned. Without it every
+   * call restarts at the head of the scan, and a page of work that is old but still healthy
+   * sits there permanently — those rows are skipped rather than patched, so their age never
+   * moves and nothing behind them is ever examined. A loop that discards the cursor makes no
+   * progress at all in the condition this function exists for.
+   *
    * Schedule it alongside `cleanup`, and run it FIRST: a rescued row becomes `pending` and is
    * therefore outside retention either way, so the ordering is free, whereas the reverse
    * leaves a stuck row unexamined for a whole interval.
@@ -243,8 +261,8 @@ export class TinybirdDelivery {
    */
   async requeueStuck(
     ctx: RunMutationCtx,
-    args: { olderThanMs?: number; limit?: number; actor?: string } = {},
-  ): Promise<{ requeued: number; remaining: boolean }> {
+    args: { olderThanMs?: number; limit?: number; actor?: string; cursor?: RequeueCursor } = {},
+  ): Promise<{ requeued: number; remaining: boolean; cursor: RequeueCursor }> {
     return ctx.runMutation(this.component.recovery.requeueStuck, args);
   }
 
