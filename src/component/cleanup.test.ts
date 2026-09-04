@@ -155,6 +155,22 @@ describe("retention cleanup", () => {
     expect(await tableCounts(t)).toEqual({ events: 0, payloads: 0 });
   });
 
+  it("still tolerates the stale pointer after narrowing the catch", async () => {
+    // The narrowing must not undo the wedge fix. A bare catch would have swallowed anything;
+    // this one tolerates only "already gone", so the case that actually happens still has to
+    // pass through it.
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+    await aged(t, "stale_again", "delivered", 10 * DAY);
+    await t.run(async (ctx) => {
+      const event = await ctx.db.query("events").first();
+      await ctx.db.delete(event!.payloadId!);
+    });
+
+    expect(await t.mutation(api.lib.cleanup, {})).toMatchObject({ deletedDelivered: 1 });
+    expect(await tableCounts(t)).toEqual({ events: 0, payloads: 0 });
+  });
+
   it("removes a payload row whose event has already gone", async () => {
     // The other orphan. Nothing in the component produces one today, but retention is the
     // only thing that could, so a half-delete would accumulate silently — the uncounted
@@ -175,11 +191,47 @@ describe("retention cleanup", () => {
     expect(await t.mutation(api.lib.cleanup, {})).toMatchObject({ deletedDelivered: 0 });
     expect(await tableCounts(t)).toEqual({ events: 0, payloads: 1 });
 
-    expect(await t.mutation(api.lib.reclaimOrphanedPayloads, {})).toEqual({
+    expect(await t.mutation(api.lib.reclaimOrphanedPayloads, {})).toMatchObject({
       reclaimed: 1,
       scanned: 1,
+      isDone: true,
     });
     expect(await tableCounts(t)).toEqual({ events: 0, payloads: 0 });
+  });
+
+  it("finds an orphan that sits past the first scan window", async () => {
+    // The fixture that matters, and the one the first version of this test did not have.
+    // That one had exactly ONE payload row, which was also the orphan — so the scan window
+    // was never tested against a table larger than the window, and a scan that could only
+    // ever see the first page passed it.
+    //
+    // Healthy rows are never deleted, so without a cursor they occupy the window forever and
+    // every orphan behind them is invisible for good. Not slow progress: no progress.
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+    for (let i = 0; i < 12; i += 1) await aged(t, `keep_${i}`, "pending", 0);
+    await aged(t, "orphan", "pending", 0);
+    await t.run(async (ctx) => {
+      const event = await ctx.db
+        .query("events")
+        .withIndex("by_identity", (q) => q.eq("datasource", "events").eq("eventId", "orphan"))
+        .unique();
+      await ctx.db.delete(event!._id);
+    });
+
+    // Scan in windows far smaller than the table, carrying the cursor as a host would.
+    let cursor: string | null = null;
+    let reclaimed = 0;
+    for (let pass = 0; pass < 20; pass += 1) {
+      const result: { reclaimed: number; cursor: string | null; isDone: boolean } =
+        await t.mutation(api.lib.reclaimOrphanedPayloads, { limit: 3, cursor });
+      reclaimed += result.reclaimed;
+      cursor = result.cursor;
+      if (result.isDone) break;
+    }
+
+    expect(reclaimed).toBe(1);
+    expect(await tableCounts(t)).toEqual({ events: 12, payloads: 12 });
   });
 
   it("measures retention from when the event finished, not when it was created", async () => {

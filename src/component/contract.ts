@@ -114,10 +114,25 @@ export const DEFAULT_CLEANUP_LIMIT = 200;
  *
  * Small where the retention limit is large, and for the opposite reason. Finding an orphan
  * means READING payload rows, whose size a host controls up to
- * {@link HARD_MAX_PAYLOAD_BYTES}; at that bound 25 rows is about 13 MB, so this is sized to
- * stay inside one transaction whatever a host has configured.
+ * {@link HARD_MAX_PAYLOAD_BYTES}, so the byte cost is the payload size and not the row
+ * count. Against roughly 8 MiB per call at a 35% share:
+ *
+ * | payload bound | rows that fit |
+ * |---|---|
+ * | 1 KiB | ~950 |
+ * | 64 KiB (default) | ~43 |
+ * | 512 KiB (hard cap) | ~5 |
+ *
+ * Five, so the default is safe for ANY payload size a host may configure. An earlier value
+ * of 25 was justified in exactly the opposite direction — the docblock claimed 25 rows was
+ * "about 13 MB, sized to stay inside one transaction", when 13 MB is 156% of the budget the
+ * rest of this component is sized against. It was safe at the default bound and unsafe at
+ * the one the sentence named.
+ *
+ * A host whose events are small should pass a much larger `limit`; the scan is paginated, so
+ * the cost of a small default is more calls rather than an unreachable table.
  */
-export const DEFAULT_ORPHAN_SCAN_LIMIT = 25;
+export const DEFAULT_ORPHAN_SCAN_LIMIT = 5;
 
 /** How many earlier failures an event keeps alongside its newest one. */
 export const MAX_ERROR_HISTORY = 5;

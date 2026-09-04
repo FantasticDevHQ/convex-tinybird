@@ -193,10 +193,21 @@ Each sweep records itself in `lastOperatorAction` with the `actor` you pass and 
 it removed, so a sweep that stops running is visible rather than showing up only as tables that
 quietly grow.
 
+One budget is spent across both states, delivered first. A large delivered backlog therefore
+delays the failed sweep by a few passes rather than starving it — the loop above drains both, but
+if you care about dead letters promptly, call `cleanup` with a `failedRetentionMs` of your own on
+its own schedule.
+
 `reclaimOrphanedPayloads` is a separate, rarer call for payload rows whose event has gone.
 Nothing here produces one — but finding them means reading payloads, and a payload is the one
 thing whose size you control, so folding that scan into the frequent sweep would make retention's
-cost depend on your event size again. Its default limit is 25 for the same reason.
+cost depend on your event size again.
+
+It is paginated: carry `cursor` forward until `isDone`. Without that it would rescan the same
+first page forever, because healthy rows are never deleted and so occupy it permanently. The
+default `limit` is 5, sized for the largest payload the component allows; if your events are
+small, pass a far larger one — roughly 43 at the default 64 KiB bound, and several hundred below
+that.
 
 ## Replaying dead letters
 

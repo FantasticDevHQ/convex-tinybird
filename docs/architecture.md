@@ -78,12 +78,14 @@ returns `repaired`. Whether it also puts the event back to work depends on what 
 doing: a dead letter is requeued, and so is a `pending` row that nothing had scheduled, but an
 event already `delivering` is left alone — it is mid-attempt, and restoring its payload is enough
 for that attempt to finish. Requeueing it would give it a second worker, which is the failure the
-guard on that branch exists to prevent. The payload cannot be compared, because it is gone; `payloadBytes` and a
+guard on that branch exists to prevent. The payload cannot be compared, because it is gone;
+`payloadBytes` and a
 fingerprint of the canonical text survive on the event row and are checked instead, so a repair
 with different content is a conflict. The fingerprint is FNV-1a and not cryptographic: it detects
 an accidental substitution, such as a host bug that flips a status or swaps an id, and does not
 pretend to stop a deliberate one. Byte length alone could not do even that much, because the field
-shapes that dominate real payloads are fixed width. An event already `delivered` is a duplicate, not a repair — there is
+shapes that dominate real payloads are fixed width. An event already `delivered` is a duplicate,
+not a repair — there is
 nothing to resend.
 
 A response is one of three things: delivered, terminally failed, or worth another attempt.
@@ -257,7 +259,8 @@ event finished. Both `markDelivered` and `markFailed` set it as they move a row 
 state. Creation time would be wrong in the case that matters most: an event that sat `pending`
 through a long pause and was delivered a moment ago already has a `createdAt` older than any
 retention, so it would be swept on the very next pass — a dedupe window of zero for exactly the
-events a producer is most likely to re-emit after noticing the outage. `pending` and `delivering` are never queried — not queried
+events a producer is most likely to re-emit after noticing the outage. `pending` and `delivering`
+are never queried — not queried
 and filtered, which is the difference between a rule and a comment. A row exactly at the cutoff
 is kept: the comparison is `lt`, because deleting on equality would quietly shorten every
 retention by one tick.

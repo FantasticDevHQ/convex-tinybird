@@ -279,9 +279,24 @@ export async function deleteEventWithPayload(
     // runs for anything until someone intervenes by hand.
     try {
       await ctx.db.delete(event.payloadId);
-    } catch {
-      // Already gone is the outcome we wanted. Narrow on purpose: the only failure this can
-      // swallow is a delete of something that is not there.
+    } catch (error) {
+      // ONLY "already gone" is tolerated; anything else re-throws. A bare catch would
+      // swallow a wrong-table id, a write-limit error, or whatever a future Convex version
+      // raises — and the very next line deletes the event regardless, manufacturing exactly
+      // the orphan `reclaimOrphanedPayloads` exists to find. Losing a payload silently is
+      // worse than failing the sweep loudly.
+      //
+      // Matched on the message because Convex offers no code for it. Brittle in the safe
+      // direction: if the wording changes this re-throws, so the wedge returns visibly
+      // rather than a real error being hidden.
+      //
+      // NOT pinned by a test, and it cannot be here — constructing a delete failure that is
+      // not "already gone" needs the harness to reject something, and convex-test accepts
+      // even an id from the wrong table. Said plainly because the tolerated case IS tested
+      // and it would be easy to read that as covering both branches.
+      if (!(error instanceof Error) || !/non-existent doc/iu.test(error.message)) {
+        throw error;
+      }
     }
   } else {
     const stored = await ctx.db
@@ -340,15 +355,26 @@ export async function sweepExpired(
 export async function sweepOrphanedPayloads(
   ctx: MutationCtx,
   batch: number,
-): Promise<{ reclaimed: number; scanned: number }> {
-  const candidates = await ctx.db.query("payloads").take(batch);
+  cursor: string | null,
+): Promise<{ reclaimed: number; scanned: number; cursor: string | null; isDone: boolean }> {
+  // Paginated, because a plain `take(n)` cannot work here. Healthy rows are never deleted,
+  // so they occupy the front of the table permanently and an unordered `take` rescans the
+  // same page on every call — an orphan behind that page is invisible for good. Not slow
+  // progress: no progress. The caller carries the cursor forward.
+  const page = await ctx.db.query("payloads").paginate({ cursor, numItems: batch });
   let reclaimed = 0;
-  for (const stored of candidates) {
+  for (const stored of page.page) {
     if ((await ctx.db.get(stored.eventId)) === null) {
       await ctx.db.delete(stored._id);
       reclaimed += 1;
     }
   }
-  // `scanned` is reported so a caller can tell "no orphans" from "looked at nothing".
-  return { reclaimed, scanned: candidates.length };
+  return {
+    reclaimed,
+    // `scanned` alone cannot answer "are there orphans anywhere" — that is what `isDone`
+    // is for. It is reported so a caller can tell a clean page from an empty one.
+    scanned: page.page.length,
+    cursor: page.isDone ? null : page.continueCursor,
+    isDone: page.isDone,
+  };
 }

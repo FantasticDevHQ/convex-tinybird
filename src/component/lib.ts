@@ -368,11 +368,19 @@ export const cleanup = mutation({
  * to stay inside a transaction at any payload size a host may configure.
  */
 export const reclaimOrphanedPayloads = mutation({
-  args: { limit: v.optional(v.number()) },
-  returns: v.object({ reclaimed: v.number(), scanned: v.number() }),
-  handler: async (ctx, { limit }) => {
-    const batch = boundedBatch(limit, DEFAULT_ORPHAN_SCAN_LIMIT, DEFAULT_ORPHAN_SCAN_LIMIT);
-    return sweepOrphanedPayloads(ctx, batch);
+  args: { limit: v.optional(v.number()), cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.object({
+    reclaimed: v.number(),
+    scanned: v.number(),
+    cursor: v.union(v.string(), v.null()),
+    isDone: v.boolean(),
+  }),
+  handler: async (ctx, { limit, cursor }) => {
+    // No ceiling separate from the default: a host that knows its payloads are small should
+    // be able to ask for a page far larger than the conservative default, and the byte cost
+    // is theirs to reason about from the table in `DEFAULT_ORPHAN_SCAN_LIMIT`'s docblock.
+    const batch = boundedBatch(limit, DEFAULT_ORPHAN_SCAN_LIMIT, Number.MAX_SAFE_INTEGER);
+    return sweepOrphanedPayloads(ctx, batch, cursor ?? null);
   },
 });
 
