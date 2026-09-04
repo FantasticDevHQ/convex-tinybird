@@ -11,7 +11,7 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function copyPackage() {
   const dir = mkdtempSync(join(tmpdir(), "readme-samples-"));
-  for (const entry of ["README.md", "example"]) {
+  for (const entry of ["README.md", "example", "src"]) {
     cpSync(join(packageRoot, entry), join(dir, entry), {
       recursive: true,
       // `node_modules` holds a workspace symlink back to this package, so copying it recurses
@@ -132,6 +132,71 @@ test("still passes a sample that calls something real", () => {
       `${readFileSync(readme, "utf8")}\n\`\`\`ts\nawait productEvents.enqueue(ctx, {});\n\`\`\`\n`,
     );
     assert.deepEqual(checkReadmeSamples(dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("rejects a name that is not on the client, however it is fenced or spelled", () => {
+  // Verification's hole 2, and the one that defeated two earlier designs: existence was checked
+  // against the EXAMPLE with an unanchored `.name(`, so a sample inventing a whole read API
+  // passed on the strength of `ctx.db.query(`, `.first()`, `.take(` and `ctx.db.insert(`.
+  // The oracle for "does it exist" is now the client class.
+  const dir = copyPackage();
+  try {
+    const readme = join(dir, "README.md");
+    writeFileSync(
+      readme,
+      `${readFileSync(readme, "utf8")}\n\`\`\`ts\nconst tinybird = new TinybirdDelivery(components.productEvents);\nconst failures = await tinybird.query(ctx, {});\nconst page = await tinybird.take(ctx, 20);\n\`\`\`\n`,
+    );
+    const failures = checkReadmeSamples(dir);
+    assert.ok(
+      failures.some((f) => /"query\("/u.test(f)),
+      failures.join("\n"),
+    );
+    assert.ok(
+      failures.some((f) => /"take\("/u.test(f)),
+      failures.join("\n"),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("separates 'exists' from 'is demonstrated'", () => {
+  // A real client method the example does not show must fail check 2 and NOT check 1, because
+  // the two answer different questions and conflating them was the original defect.
+  const dir = copyPackage();
+  try {
+    const readme = join(dir, "README.md");
+    writeFileSync(
+      readme,
+      `${readFileSync(readme, "utf8")}\n\`\`\`ts\nawait tinybird.reclaimOrphanedPayloads(ctx);\n\`\`\`\n`,
+    );
+    const failures = checkReadmeSamples(dir);
+    assert.equal(failures.length, 1, failures.join("\n"));
+    assert.match(failures[0], /no file under example\/convex calls it/u);
+    assert.doesNotMatch(failures[0], /has no such method/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fails loudly if the client oracle stops parsing", () => {
+  // If `src/client/index.ts` is reshaped so no methods are found, check 1 silently accepts
+  // everything. That is the control-that-cannot-fail shape, so it is an explicit failure.
+  const dir = copyPackage();
+  try {
+    const client = join(dir, "src", "client", "index.ts");
+    writeFileSync(
+      client,
+      readFileSync(client, "utf8").replace(/export class TinybirdDelivery/u, "class Renamed"),
+    );
+    const failures = checkReadmeSamples(dir);
+    assert.ok(
+      failures.some((f) => /no client methods parsed/u.test(f)),
+      failures.join("\n"),
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
