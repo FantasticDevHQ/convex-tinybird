@@ -207,8 +207,10 @@ export class TinybirdDelivery {
    * what you were given.
    *
    * The default `limit` of 2 is sized for the largest payload a host may configure, and
-   * reclaiming an orphan pays for its payload twice. If yours are small, pass a larger one;
-   * the docblock on the constant has the arithmetic.
+   * reclaiming an orphan pays for its payload twice. If yours are small you may raise it, but
+   * only as far as `MAX_ORPHAN_SCAN_LIMIT` in the component's `budget.ts` — a larger value is
+   * silently clamped to it rather than honoured.
+   * The docblock on the constant has the arithmetic and says why the ceiling is where it is.
    */
   async reclaimOrphanedPayloads(
     ctx: RunMutationCtx,

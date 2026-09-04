@@ -206,10 +206,17 @@ cost depend on your event size again.
 
 Carry `cursor` forward until `isDone`. It is a number rather than an opaque token, because `.paginate()` is only supported in the app and never inside a component; treat it as opaque anyway and pass back exactly what you were given. Without that it would rescan the same
 first page forever, because healthy rows are never deleted and so occupy it permanently. The
-default `limit` is 2, sized for the largest payload the component allows; if your events are
-small, pass a larger one — roughly 22 at the default 64 KiB bound and roughly 440 at 1 KiB,
-capped at 20. Unlike `cleanup` this scan cannot budget by bytes, because it reads payload rows to
-discover their size; the limit is the only bound it has.
+The default `limit` is 2, sized for the largest payload the component allows, and you may raise
+it to at most **20** — anything higher is clamped to 20 rather than honoured.
+
+Twenty is what the default 64 KiB payload bound affords. If your payloads are much smaller the
+read budget would allow far more — around 440 at 1 KiB — but the ceiling does not, and that is
+deliberate rather than an oversight: unlike `cleanup`, this scan cannot budget by bytes, because
+it learns a payload's size by reading it and has therefore already paid. A row count is the only
+bound available, and one fixed number cannot be both safe at 512 KiB and generous at 1 KiB.
+
+So if a reclaim pass is too slow for your table, the ceiling is the thing to revisit — not the
+`limit` you pass, which cannot go above it.
 
 The scan is eventually consistent per **pass**, not per call: a row inserted behind a scan that
 has already gone past it is found on the next pass, because `isDone` resets the cursor. At the

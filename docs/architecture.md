@@ -298,8 +298,8 @@ state. Creation time would be wrong in the case that matters most: an event that
 through a long pause and was delivered a moment ago already has a `createdAt` older than any
 retention, so it would be swept on the very next pass — a dedupe window of zero for exactly the
 events a producer is most likely to re-emit after noticing the outage. `pending` and `delivering`
-are never queried — not queried
-and filtered, which is the difference between a rule and a comment. A row exactly at the cutoff
+are never queried at all, rather than queried and then filtered — which is the difference
+between a rule and a comment. A row exactly at the cutoff
 is kept: the comparison is `lt`, because deleting on equality would quietly shorten every
 retention by one tick.
 
