@@ -13,7 +13,7 @@
  * Deliberately NOT covered: `devDependencies` (test tooling may be anything) and files under
  * `_generated` (machine-written; the generator decides their imports).
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -234,37 +234,63 @@ export function checkBoundary(packageRoot) {
     }
   }
 
-  const src = join(root, "src");
-  for (const file of sourceFiles(src)) {
-    const path = join(src, file);
-    const text = readFileSync(path, "utf8");
-    const { code, unterminated } = codeOnly(text);
-    if (unterminated !== null) {
-      // The scanner does not lex regular expressions, so a quote character inside one --
-      // `/"/gu`, or an apostrophe in a character class -- opens a string that never closes.
-      // From there it reads code as string and string as code, which breaks the gate in
-      // BOTH directions: an identity read after such a line is swallowed, and a legitimate
-      // mention inside a later string is emitted as code and rejected. Every such misread
-      // ends the file still inside a string and nothing legitimate does, so this turns a
-      // silent wrong answer into a loud one. Lexing regex literals correctly needs
-      // previous-token context and is its own corner-case farm; refusing to guess is better.
-      failures.push(
-        `src/${file}: unterminated ${unterminated} string — the boundary scanner cannot read ` +
-          `this file, so it cannot be cleared. A regular expression containing a quote is the ` +
-          `usual cause; assign it via a name the scanner can see, or split the line.`,
-      );
-      continue;
-    }
-    for (const { pattern, why } of FORBIDDEN_SOURCE_PATTERNS) {
-      if (pattern.test(code)) {
-        failures.push(`src/${file}: forbidden construct ${pattern.source} — ${why}`);
+  // Both the component AND the example app. The example is the portability proof: it mounts the
+  // component in an app with an unrelated schema and may import `convex` and the component and
+  // nothing else. Scanning only `src/` would clear a component that is portable in principle
+  // while the one app demonstrating it quietly reached for a host package.
+  //
+  // `_generated` is excluded by `sourceFiles`; the example's generated code is written by
+  // Convex and is not ours to constrain.
+  const scanRoots = [
+    { label: "src", dir: join(root, "src") },
+    // The example may import the component — that is the entire point of it — but nothing
+    // else under `@fantastic-dev/`. Narrowed to this exact package rather than the scope, so
+    // an example that reached for `@fantastic-dev/backend` or the db package still fails.
+    {
+      label: "example/convex",
+      dir: join(root, "example", "convex"),
+      selfImportAllowed: /^@fantastic-dev\/convex-tinybird(\/|$)/,
+    },
+  ];
+  for (const { label, dir, selfImportAllowed } of scanRoots) {
+    // A root that does not exist is not a violation. The self-test's fixtures are component
+    // trees with no example app, and treating their absence as a failure would make every
+    // fixture fail for a reason none of them is about.
+    if (!existsSync(dir)) continue;
+    for (const file of sourceFiles(dir)) {
+      const path = join(dir, file);
+      const text = readFileSync(path, "utf8");
+      const { code, unterminated } = codeOnly(text);
+      if (unterminated !== null) {
+        // The scanner does not lex regular expressions, so a quote character inside one --
+        // `/"/gu`, or an apostrophe in a character class -- opens a string that never closes.
+        // From there it reads code as string and string as code, which breaks the gate in
+        // BOTH directions: an identity read after such a line is swallowed, and a legitimate
+        // mention inside a later string is emitted as code and rejected. Every such misread
+        // ends the file still inside a string and nothing legitimate does, so this turns a
+        // silent wrong answer into a loud one. Lexing regex literals correctly needs
+        // previous-token context and is its own corner-case farm; refusing to guess is better.
+        failures.push(
+          `${label}/${file}: unterminated ${unterminated} string — the boundary scanner cannot read ` +
+            `this file, so it cannot be cleared. A regular expression containing a quote is the ` +
+            `usual cause; assign it via a name the scanner can see, or split the line.`,
+        );
+        continue;
       }
-    }
-    for (const specifier of specifiersIn(text)) {
-      if (FORBIDDEN_SPECIFIER_PATTERNS.some((pattern) => pattern.test(specifier))) {
-        failures.push(`src/${file}: forbidden import "${specifier}"`);
-      } else if (escapesPackage(specifier, dirname(path), root)) {
-        failures.push(`src/${file}: relative import "${specifier}" escapes the package`);
+      for (const { pattern, why } of FORBIDDEN_SOURCE_PATTERNS) {
+        if (pattern.test(code)) {
+          failures.push(`${label}/${file}: forbidden construct ${pattern.source} — ${why}`);
+        }
+      }
+      for (const specifier of specifiersIn(text)) {
+        if (selfImportAllowed !== undefined && selfImportAllowed.test(specifier)) {
+          continue;
+        }
+        if (FORBIDDEN_SPECIFIER_PATTERNS.some((pattern) => pattern.test(specifier))) {
+          failures.push(`${label}/${file}: forbidden import "${specifier}"`);
+        } else if (escapesPackage(specifier, dirname(path), root)) {
+          failures.push(`${label}/${file}: relative import "${specifier}" escapes the package`);
+        }
       }
     }
   }

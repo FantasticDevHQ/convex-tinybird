@@ -1,0 +1,22 @@
+{
+  "name": "@fantastic-dev/convex-tinybird-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal Convex app that mounts two named instances of the Tinybird component. Exists to prove the component is portable: it depends on convex and the component and nothing else.",
+  "scripts": {
+    "codegen": "convex codegen",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fantastic-dev/convex-tinybird": "workspace:*",
+    "convex": "^1.44.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.11",
+    "convex-test": "^0.0.55",
+    "vite": "8.2.1",
+    "vitest": "^4.1.10"
+  }
+}
