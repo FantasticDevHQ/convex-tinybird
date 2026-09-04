@@ -134,6 +134,43 @@ describe("repairing a lost payload", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("repairs on an unconfigured instance, where resume cannot start it either", async () => {
+    // The third shape, and the one that hides. `scheduleDelivery` declines on a missing
+    // token as well as on a pause, so the row after repair looks IDENTICAL to the paused
+    // case: `repaired`/`pending`, no worker, `health` counting ordinary backlog. What
+    // differs is the operator's next move. `resume` counts what it actually scheduled, so
+    // on a paused instance it reports 1 and delivers, and here it reports 0 and does
+    // nothing at all — the documented remedy, "fix the payload, then resume", silently
+    // achieves nothing until a token exists.
+    //
+    // That is correct rather than a defect: an unconfigured instance delivers nothing by
+    // design. It is pinned because the row state cannot distinguish the two declines, so
+    // this test and the paused one beside it are the only thing that says which is which.
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await enqueueOne(t);
+    await t.run(async (ctx) => {
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+    });
+    await drain(t);
+    expect((await statusOf(t))?.lastError?.category).toBe("payload_missing");
+
+    // The token goes away before the repair, so scheduling declines for that reason.
+    vi.stubEnv("TINYBIRD_TOKEN", "");
+    fetchSpy.mockClear();
+    expect(await enqueueOne(t)).toMatchObject({ outcome: "repaired", state: "pending" });
+    await drain(t);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    // The discriminating assertion: zero, where the paused instance reports one.
+    expect(await t.mutation(api.lib.resume, {})).toMatchObject({ requeued: 0 });
+    await drain(t);
+    expect(await statusOf(t)).toMatchObject({ state: "pending" });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("repairs a dead letter on a paused instance without scheduling it", async () => {
     // The one shape where the guard's condition is TRUE and the repair still schedules
     // nothing: `scheduleDelivery` declines while paused, so `requeueDeadLetter` returns the
@@ -168,10 +205,18 @@ describe("repairing a lost payload", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("lets the attempt already in flight pick up a payload it never loaded", async () => {
-    // The half the `delivering` test stops short of. That test shows the in-flight event is
-    // not disturbed; this one shows the repair was worth doing — the retry that follows
-    // loads the restored payload, even though the attempt that started before it did not.
+  it("delivers a repaired pending row through the work item it already had", async () => {
+    // Named for what it does, after an earlier version claimed something it did not build.
+    // It said the retry picked up a payload the first attempt never saw. Neither half was
+    // true: the timers are fake, so `enqueueWithRetry` only queues the item and both the
+    // delete and the repair happen before the first drain, so nothing was ever in flight
+    // when the payload vanished. And the `delivered` assertion below refutes the rest — had
+    // attempt 1 found no payload, `markFailed` would have written `payload_missing` and this
+    // row would be `failed`.
+    //
+    // What it actually pins is worth keeping and was untested: a repaired `pending` row is
+    // delivered by the work item it ALREADY holds. Repair deliberately does not schedule
+    // that row, so if the existing item did not carry it through, nothing would.
     let attempt = 0;
     const fetchSpy = vi.fn().mockImplementation(() => {
       attempt += 1;
@@ -182,14 +227,13 @@ describe("repairing a lost payload", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const t = setup();
     await enqueueWithRetry(t, 3);
-
-    // The payload vanishes while the first attempt is in flight, then comes back before the
-    // retry runs. The retry's own `loadForDelivery` is what finds it.
     await t.run(async (ctx) => {
       const stored = await ctx.db.query("payloads").first();
       await ctx.db.delete(stored!._id);
     });
-    await enqueueOne(t);
+
+    // The row holds a live item, so repair restores the payload and leaves it alone.
+    expect(await enqueueOne(t)).toMatchObject({ outcome: "repaired", state: "pending" });
     await drain(t);
 
     expect(await statusOf(t)).toMatchObject({ state: "delivered" });
