@@ -201,3 +201,38 @@ test("fails loudly if the client oracle stops parsing", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("catches a method attributed to the client in PROSE, not just in a sample", () => {
+  // The one real error this guide shipped — `getStatus` described as a client call when it is a
+  // component-side query — was written in a sentence. Checks 1 and 2 read fenced blocks and were
+  // blind to it by construction, so widening the fence pattern did nothing for it.
+  const dir = copyPackage();
+  try {
+    const readme = join(dir, "README.md");
+    writeFileSync(
+      readme,
+      `${readFileSync(readme, "utf8")}\n\nOperators read one event with \`tinybird.getStatus(ctx, {})\` when triaging.\n`,
+    );
+    const failures = checkReadmeSamples(dir);
+    assert.equal(failures.length, 1);
+    assert.match(failures[0], /prose attributes "getStatus\("/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("does not fire on prose naming a method the client really has", () => {
+  // The leg that stops check 3 being satisfiable by rejecting everything. Without it, a prose
+  // check that failed on every qualified span would look identical to one that works.
+  const dir = copyPackage();
+  try {
+    const readme = join(dir, "README.md");
+    writeFileSync(
+      readme,
+      `${readFileSync(readme, "utf8")}\n\nAn operator pauses a stream with \`tinybird.pause(ctx, {})\`.\n`,
+    );
+    assert.deepEqual(checkReadmeSamples(dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

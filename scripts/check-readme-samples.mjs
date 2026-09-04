@@ -127,6 +127,35 @@ export function checkReadmeSamples(root) {
     }
   }
 
+  // CHECK 3: PROSE, on the same oracle as check 1.
+  //
+  // The one real error this guide has shipped — describing `getStatus` as something you call on
+  // the client, when it is a component-side query — was written in a SENTENCE, not a sample.
+  // Checks 1 and 2 read fenced blocks only and were blind to it by construction, so widening
+  // fences did nothing for it. Most of this guide is the sentences between the samples.
+  //
+  // Only CLIENT-QUALIFIED spans are checked: `` `tinybird.foo(` ``. A bare `` `foo` `` is not,
+  // and that is deliberate rather than an oversight — 58 identifier-shaped spans appear in this
+  // prose and 47 of them are field names, states, error codes and env vars that have nothing to
+  // do with the client surface. Checking those needs a hand-maintained allowlist that fails on
+  // correct documentation the first time someone documents a new field, and a gate that fires on
+  // correct work is a gate that gets switched off. So this catches "attributed to the client and
+  // wrong", which is the shape of the bug that actually happened, and does NOT catch a bare
+  // invented name in prose. That gap is real and stated rather than papered over.
+  const prose = readme.replace(/```[\s\S]*?```/gu, "");
+  const proseCalls = new Set();
+  for (const span of prose.matchAll(/`([^`\n]+)`/gu)) {
+    for (const call of span[1].matchAll(callPattern)) proseCalls.add(call[1]);
+  }
+  for (const name of [...proseCalls].sort()) {
+    if (!methods.has(name)) {
+      failures.push(
+        `README.md prose attributes "${name}(" to a client, and TinybirdDelivery has no such ` +
+          `method. Its surface is: ${[...methods].sort().join(", ")}.`,
+      );
+    }
+  }
+
   return failures;
 }
 

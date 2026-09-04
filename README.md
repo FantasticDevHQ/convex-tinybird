@@ -170,16 +170,26 @@ transaction cannot re-enqueue all of it. Call it until it reports nothing left:
 
 ```ts
 let requeued = 0;
+let pass = 0;
 do {
-  ({ requeued } = await tinybird.resume(ctx, { actor: userId }));
-} while (requeued > 0);
+  const result = await tinybird.resume(ctx, { actor: userId });
+  requeued += result.requeued;
+  if (result.requeued === 0) break;
+  pass += 1;
+} while (pass < 10);
 ```
 
 `resume` only picks up events the delivery pool is not already working on. An event that is
 `pending` between two retry attempts needs no operator, and queueing a second work item for it
-would give it a second retry budget and let it be sent more times than its policy allows. That is
-also what makes the loop above terminate: each call schedules what it picks up, so the next call
-finds nothing left to do.
+would give it a second retry budget and let it be sent more times than its policy allows. So each
+call schedules what it picks up, and the next call finds less to do.
+
+The pass bound is not decoration. This runs inside a mutation, and a mutation has a fixed
+transaction budget — an unbounded `do { } while (requeued > 0)` is fine on a small backlog and
+runs until it hits that budget on a large one, which is exactly the situation an operator reaches
+for `resume` in. Bounding the passes means a big backlog takes several calls instead of failing
+one; the returned count accumulates across passes so the operator can see whether to call again.
+This is the shape `example/convex/operations.ts` uses, and this sample is lifted from it.
 
 ## Replaying dead letters
 

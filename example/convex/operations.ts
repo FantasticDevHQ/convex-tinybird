@@ -13,8 +13,22 @@ const productEvents = new TinybirdDelivery(components.productEvents);
  *
  * **These are unauthenticated on purpose, and that is the point.** The component authenticates
  * nobody — `actor` is an opaque string it records and never checks — so authorization is the
- * host's job. A real app puts its own check at the top of each of these. The example does not,
- * because inventing an auth scheme here would obscure the one thing it is demonstrating.
+ * host's job. The example does not do it, because inventing an auth scheme here would obscure
+ * the one thing it is demonstrating.
+ *
+ * Do not copy these verbatim. Every one of them pauses, replays or requeues a live delivery
+ * stream, and as written any caller can invoke them. A real host opens each handler with its own
+ * check and passes the identity it just established as `actor`, so the audit trail records who
+ * actually did it rather than a string the caller chose:
+ *
+ * ```ts
+ * const identity = await ctx.auth.getUserIdentity();
+ * if (identity === null) throw new Error("unauthenticated");
+ * await productEvents.pause(ctx, { actor: identity.subject });
+ * ```
+ *
+ * That `ctx.auth` call is legal HERE and forbidden inside the component — the boundary gate
+ * enforces exactly that split, and scans this app for imports only.
  */
 /** Both signals an operator dashboard polls: the cheap one and the counted one. */
 export const operatorHeartbeat = query({
