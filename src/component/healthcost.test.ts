@@ -1,7 +1,11 @@
 import { installComponentTestHooks, seedEvent, setup } from "../testing/fixtures";
 import {
   COUNT_CAP,
+  DEFAULT_CLEANUP_LIMIT,
   DEFAULT_ORPHAN_SCAN_LIMIT,
+  EVENT_ROW_READ_BYTES,
+  PAYLOAD_ROW_OVERHEAD_BYTES,
+  SWEEP_READ_BUDGET_BYTES,
   HARD_MAX_PAYLOAD_BYTES,
   MAX_DATASOURCE_NAME_LENGTH,
   MAX_ERROR_HISTORY,
@@ -243,5 +247,44 @@ describe("what a full orphan scan costs", () => {
     // default: a sixth row crosses the ceiling. So raising the default, widening the hard
     // payload cap, or adding a field to either row all land here.
     expect((DEFAULT_ORPHAN_SCAN_LIMIT + 1) * perScannedRow).toBeGreaterThan(budget);
+  });
+});
+
+describe("what a retention sweep costs", () => {
+  it("keeps its sizing constants tied to the rows they claim to describe", async () => {
+    // The ratchet that was missing. Every byte claim about the sweep was prose for three
+    // rounds, and the one that mattered was false: `ctx.db.delete(id)` reads the whole
+    // document (`delete_inner` -> `get_inner` -> `record_read_document(..., doc.size(), ...,
+    // &self.limits)`), so the sweep's real cost is the event row plus its payload, not the
+    // event row alone. `convex-test` enforces no byte limit, so no behavioural test can see
+    // the overrun. What this can do is refuse to let the CONSTANTS drift from the rows.
+    const rows = await measureWorstCaseRow();
+
+    // Counted twice: once from `by_state_updatedAt`, once by the delete that fetches it.
+    expect(EVENT_ROW_READ_BYTES).toBeGreaterThanOrEqual(2 * rows.event);
+
+    // The payload row costs its text plus this. Measured against the real row rather than
+    // assumed, so adding a field to `payloads` lands here.
+    expect(PAYLOAD_ROW_OVERHEAD_BYTES).toBeGreaterThanOrEqual(
+      rows.payload - HARD_MAX_PAYLOAD_BYTES,
+    );
+
+    const worstRow = EVENT_ROW_READ_BYTES + HARD_MAX_PAYLOAD_BYTES + PAYLOAD_ROW_OVERHEAD_BYTES;
+
+    // One row always fits, which is why `sweepExpired` deletes the first row whatever it
+    // costs. That branch is UNREACHABLE today and this is the assertion that says so — if it
+    // ever stops holding, the branch starts mattering and this test is where you find out.
+    expect(worstRow).toBeLessThan(SWEEP_READ_BUDGET_BYTES);
+
+    // Two bounds, each binding where it should. At the hard payload cap the bytes bind well
+    // before the row cap: without this, `DEFAULT_CLEANUP_LIMIT` could be lowered until the
+    // byte budget never fired and the sweep silently went back to being row-bounded.
+    expect(Math.floor(SWEEP_READ_BUDGET_BYTES / worstRow)).toBeLessThan(DEFAULT_CLEANUP_LIMIT);
+
+    // And at a small payload the ROW cap binds, so a full 200-row batch of ordinary events
+    // stays inside the budget. This is the leg that fails if the event row grows: it is the
+    // reason the old `200 x 5.4 KB` claim needed to be checked against something.
+    const smallRow = EVENT_ROW_READ_BYTES + 1024 + PAYLOAD_ROW_OVERHEAD_BYTES;
+    expect(DEFAULT_CLEANUP_LIMIT * smallRow).toBeLessThan(SWEEP_READ_BUDGET_BYTES);
   });
 });

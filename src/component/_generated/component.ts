@@ -119,6 +119,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             failed: { capped: boolean; count: number };
             pending: { capped: boolean; count: number };
           };
+          lastCleanupAt?: number;
           lastDeliveredAt?: number;
           lastError?: {
             at: number;
@@ -157,6 +158,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         {},
         {
           configured: boolean;
+          lastCleanupAt?: number;
           lastDeliveredAt?: number;
           lastError?: {
             at: number;

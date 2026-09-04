@@ -38,11 +38,16 @@ export const events = defineTable({
    * the event, so the event must exist first. `enqueue` patches it in the same mutation, so
    * no committed row is ever without it.
    *
-   * It exists so a retention sweep can delete the payload with `ctx.db.delete(id)`, which
-   * reads nothing. Finding it through the `by_event` index instead would return the whole
-   * document — payload text included — and put the sweep's cost back on the payload size,
-   * which is the coupling FTD-2525 removed: at the default 64 KiB bound a batch of 200 would
-   * read 12.9 MiB against a limit near 8.
+   * It exists so a retention sweep can delete the payload by id rather than searching for it
+   * through the `by_event` index. That saves the index lookup, and NOT the payload bytes:
+   * `ctx.db.delete(id)` reads the whole document and charges its size against the read limit
+   * (`delete_inner` -> `get_inner` -> `record_read_document(..., doc.size(), ...)`,
+   * `crates/database/src/transaction.rs:666`). Earlier versions of this comment said the
+   * delete "reads nothing" and the sweep was sized on that; see
+   * {@link PAYLOAD_ROW_OVERHEAD_BYTES} for what it cost.
+   *
+   * Keeping the payload out of `events` is still what makes counting, paging and health
+   * cheap — those paths never read this table at all. It is the DELETE that pays.
    */
   payloadId: v.optional(v.id("payloads")),
   state: vEventState,
@@ -91,6 +96,14 @@ export const settings = defineTable({
   lastDeliveredAt: v.optional(v.number()),
   lastError: v.optional(vDeliveryError),
   lastOperatorAction: v.optional(vOperatorAction),
+  /**
+   * When a retention sweep last ran, whether or not it deleted anything.
+   *
+   * Separate from `lastOperatorAction` because the two answer different questions and that
+   * field is a single slot. A nightly no-op sweep writing into the shared slot would erase
+   * the record of the last human action within a day of it happening.
+   */
+  lastCleanupAt: v.optional(v.number()),
 });
 
 export default defineSchema({ events, payloads, settings });

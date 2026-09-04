@@ -1,5 +1,12 @@
 import { api } from "./_generated/api";
-import { DEFAULT_CLEANUP_LIMIT } from "./contract";
+import {
+  DEFAULT_CLEANUP_LIMIT,
+  EVENT_ROW_READ_BYTES,
+  HARD_MAX_PAYLOAD_BYTES,
+  MAX_ORPHAN_SCAN_LIMIT,
+  PAYLOAD_ROW_OVERHEAD_BYTES,
+  SWEEP_READ_BUDGET_BYTES,
+} from "./contract";
 import {
   codeOf,
   drain,
@@ -277,12 +284,24 @@ describe("retention cleanup", () => {
     const t = setup("");
     await aged(t, "fresh", "delivered", 0);
 
-    for (const deliveredRetentionMs of [Number.NaN, -1, Number.POSITIVE_INFINITY]) {
-      expect(await codeOf(t.mutation(api.lib.cleanup, { deliveredRetentionMs }))).toBe(
+    // BOTH retentions, because they are two separate call sites and only one of them was
+    // covered. Verification dropped the `retention()` wrapper from the failed side alone and
+    // the whole suite stayed green at 222/222; a `failed` row seeded milliseconds earlier
+    // was then deleted by `cleanup({ failedRetentionMs: NaN })` with no error raised. The
+    // guard was real and the test was half a test.
+    await aged(t, "dead", "failed", 0);
+
+    for (const bad of [Number.NaN, -1, Number.POSITIVE_INFINITY]) {
+      expect(await codeOf(t.mutation(api.lib.cleanup, { deliveredRetentionMs: bad }))).toBe(
+        "invalid_retention",
+      );
+      expect(await codeOf(t.mutation(api.lib.cleanup, { failedRetentionMs: bad }))).toBe(
         "invalid_retention",
       );
     }
-    expect(await tableCounts(t)).toEqual({ events: 1, payloads: 1 });
+    // Both rows still here. Without this the loop proves only that a throw happened, and a
+    // throw AFTER the sweep would satisfy it.
+    expect(await tableCounts(t)).toEqual({ events: 2, payloads: 2 });
   });
 
   it("stops at the limit and reports that more remain", async () => {
@@ -360,5 +379,101 @@ describe("retention cleanup", () => {
       expect(result.deletedDelivered).toBeGreaterThan(0);
       expect((await tableCounts(t)).events).toBeLessThan(before);
     }
+  });
+
+  it("stops on BYTES before the row limit when payloads are large", async () => {
+    // The bound the row cap cannot provide. Deleting a document READS it — Convex's
+    // `delete_inner` calls `get_inner`, which records `doc.size()` against the read limit —
+    // so a batch of 200 at the default 64 KiB payload bound would read about 13 MiB against
+    // a limit near 8 MiB and throw. The row cap cannot see that, because the payload bound
+    // is a per-call host option and `cleanup` never receives it.
+    //
+    // Eight rows at the hard cap, against a limit of 200: if only the row cap were enforcing
+    // anything, all eight would go.
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+    const big = "x".repeat(HARD_MAX_PAYLOAD_BYTES);
+    for (let i = 0; i < 8; i += 1) {
+      await t.run(async (ctx) => {
+        await seedEvent(ctx, {
+          datasource: "events",
+          eventId: `big-${i}`,
+          state: "delivered",
+          attempts: 1,
+          createdAt: Date.now() - 10 * DAY,
+          updatedAt: Date.now() - 10 * DAY,
+          payload: big,
+        });
+      });
+    }
+
+    const result = await t.mutation(api.lib.cleanup, {});
+
+    // Derived from the constants rather than written as 5, so the expectation moves with the
+    // arithmetic instead of pinning a number that agrees with nothing.
+    const perRow = EVENT_ROW_READ_BYTES + HARD_MAX_PAYLOAD_BYTES + PAYLOAD_ROW_OVERHEAD_BYTES;
+    const fits = Math.floor(SWEEP_READ_BUDGET_BYTES / perRow);
+    expect(fits).toBeLessThan(DEFAULT_CLEANUP_LIMIT);
+    expect(result.deletedDelivered).toBe(fits);
+    expect(result.remaining).toBe(true);
+    expect(await tableCounts(t)).toEqual({ events: 8 - fits, payloads: 8 - fits });
+  });
+
+  it("keeps the operator's last action when a sweep finds nothing to delete", async () => {
+    // `lastOperatorAction` is ONE slot, shared with pause, resume and both replays, and the
+    // README tells hosts to run cleanup nightly. Writing it on every sweep meant a cron that
+    // deleted nothing erased the record of the last human action within a day — buying the
+    // sweep observability by destroying everyone else's.
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+    await t.mutation(api.lib.pause, { actor: "alice@example.com" });
+
+    const result = await t.mutation(api.lib.cleanup, { actor: "nightly cron" });
+    expect(result).toMatchObject({ deletedDelivered: 0, deletedFailed: 0 });
+
+    const settings = await settingsOf(t);
+    expect(settings?.lastOperatorAction).toMatchObject({
+      kind: "pause",
+      actor: "alice@example.com",
+    });
+    // And the sweep is still observable, on its own field. Without this the test would pass
+    // just as well if cleanup recorded nothing at all, which is the opposite defect.
+    expect(settings?.lastCleanupAt).toEqual(expect.any(Number));
+  });
+
+  it("records the sweep in the shared slot when it did delete something", async () => {
+    // The other direction. A cleanup that removed rows IS an action worth attributing, so
+    // suppressing the write entirely would be the over-correction.
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+    await t.mutation(api.lib.pause, { actor: "alice@example.com" });
+    await aged(t, "old", "delivered", 10 * DAY);
+
+    await t.mutation(api.lib.cleanup, { actor: "nightly cron" });
+
+    expect((await settingsOf(t))?.lastOperatorAction).toMatchObject({
+      kind: "cleanup",
+      actor: "nightly cron",
+      count: 1,
+    });
+  });
+
+  it("caps the orphan scan, so following the docs cannot blow the read budget", async () => {
+    // The orphan scan has no byte budget available to it — it reads payload rows to find out
+    // whether they are orphans, so their cost is paid before it can be weighed. The row
+    // count is its only bound, and an earlier revision removed the ceiling entirely while
+    // the README told hosts with small payloads to "pass a far larger one". A host following
+    // that advice with `limit: 900` would have read about 70% of the call budget at once.
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+    for (let i = 0; i < MAX_ORPHAN_SCAN_LIMIT + 3; i += 1) {
+      await aged(t, `p_${i}`, "delivered", 0);
+    }
+
+    const scan = await t.mutation(api.lib.reclaimOrphanedPayloads, { limit: 10_000 });
+    expect(scan.scanned).toBe(MAX_ORPHAN_SCAN_LIMIT);
+    // Nothing was an orphan, so the ceiling is the only thing this can be measuring.
+    expect(scan.reclaimed).toBe(0);
+    expect(scan.isDone).toBe(false);
   });
 });

@@ -265,13 +265,29 @@ and filtered, which is the difference between a rule and a comment. A row exactl
 is kept: the comparison is `lt`, because deleting on equality would quietly shorten every
 retention by one tick.
 
-Each deletion removes the event and its payload row together. The event carries `payloadId`
-precisely so this costs nothing to find: `ctx.db.delete(id)` reads no document, where looking
-the row up through `by_event` would return the payload text and put the sweep's cost back on
-event size — at the default 64 KiB bound a batch of 200 would read 12.9 MiB against a limit near
-8, which is the coupling the payload split removed. The index lookup survives only as a fallback
-for a row whose pointer was never recorded, because leaking a payload is worse than paying for
-one read.
+Each deletion removes the event and its payload row together. The event carries `payloadId` so
+the payload can be deleted by id instead of being searched for through `by_event`. That saves
+the index lookup and nothing else: `ctx.db.delete(id)` reads the document it deletes and charges
+its full size against the call's read limit, which Convex does in `delete_inner` by way of
+`get_inner` and `record_read_document(..., doc.size(), ...)`. Earlier revisions of this note
+claimed the delete was free and sized the sweep on that, which was wrong by roughly the size of
+every payload in the batch.
+
+So the sweep is bounded by **bytes**, not only by rows. Each event records its own
+`payloadBytes` at enqueue time, and `sweepExpired` spends a read budget against those real
+sizes, stopping early and reporting `remaining: true` when the next row would exceed it. This is
+what makes the bound true for any configuration: the payload ceiling is a per-call host option
+that `cleanup` never sees, so no fixed row count could be safe at every setting. At the default
+64 KiB bound a 200-row batch would read about 13 MiB against a limit near 8, and the byte budget
+stops it at roughly 38.
+
+The row limit still applies, and binds first when payloads are small. The first row of a batch
+is always deleted whatever it costs, because a sweep that declines to make progress never runs
+again; a single row cannot approach the limit.
+
+The index lookup survives only as a fallback for a row whose pointer was never recorded. Note
+that every row written before this component gained `payloadId` takes that path, so the first
+sweep after deploying it pays the fallback on every row, not on a rare one.
 
 **The dedupe window equals the delivered retention.** The delivered row IS the dedupe record, so
 removing it makes the same identity a new event. That is a deliberate trade rather than an

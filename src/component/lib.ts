@@ -15,7 +15,9 @@ import {
 } from "./state";
 import {
   DEFAULT_CLEANUP_LIMIT,
+  SWEEP_READ_BUDGET_BYTES,
   DEFAULT_ORPHAN_SCAN_LIMIT,
+  MAX_ORPHAN_SCAN_LIMIT,
   DEFAULT_DELIVERED_RETENTION_MS,
   DEFAULT_FAILED_RETENTION_MS,
   DEFAULT_REPLAY_LIMIT,
@@ -297,6 +299,12 @@ export const cleanup = mutation({
   handler: async (ctx, args) => {
     // Validated, not clamped. A retention is a caller's statement about what is safe to
     // destroy, so a nonsensical one is a mistake to refuse rather than a value to guess at.
+    //
+    // Zero is ACCEPTED, and deliberately: it means "delete everything finished", which is a
+    // coherent request. It is worth knowing that it arrives from the same place the refused
+    // values do — `Number(process.env.RETENTION_DAYS) * DAY` yields `NaN` when the variable
+    // is unset and `0` when it is set to "0" — so the first is refused and the second is
+    // obeyed. That asymmetry is intended: `NaN` cannot express an intent and `0` can.
     // `NaN` is the dangerous one: Convex orders it above every finite number, so
     // `lt("updatedAt", NaN)` matches every row of that state and the sweep would delete rows
     // one second old. A negative retention puts the cutoff in the future and does the same.
@@ -319,26 +327,50 @@ export const cleanup = mutation({
     // ONE budget across both states, spent in order. A limit that applied per state would
     // let `limit: 3` delete six rows, which is not what a caller bounding a transaction
     // asked for.
-    const delivered = await sweepExpired(ctx, "delivered", now - deliveredRetentionMs, budget);
+    // ONE byte budget too, and for the same reason. Splitting it would let a call read twice
+    // what a caller bounding a transaction asked for, and the bytes are the bound that
+    // actually binds once payloads are large.
+    const delivered = await sweepExpired(
+      ctx,
+      "delivered",
+      now - deliveredRetentionMs,
+      budget,
+      SWEEP_READ_BUDGET_BYTES,
+    );
     const failed = await sweepExpired(
       ctx,
       "failed",
       now - failedRetentionMs,
       budget - delivered.deleted,
+      SWEEP_READ_BUDGET_BYTES - delivered.bytesSpent,
     );
 
-    // Recorded like every other operator action, and for a stronger reason than the rest:
-    // this one destroys data, and until it wrote something here a sweep that stopped running
-    // was completely silent. A wedged sweep would have shown up only as tables that quietly
-    // grew, which is how the stale-pointer defect would have reached production.
+    // Two fields, because they answer two questions and one slot cannot hold both.
+    //
+    // `lastCleanupAt` is written on EVERY call, including one that deleted nothing. That is
+    // the "is the sweep still running" signal, and a sweep that found nothing to do is
+    // exactly as healthy as one that found plenty — a wedged sweep is silent, and silence
+    // is what this makes visible.
+    //
+    // `lastOperatorAction` is written only when the sweep actually removed something. It is
+    // a single slot shared with `pause`, `resume`, `replayFailed` and `replayEvent`, and an
+    // earlier version of this wrote it unconditionally. The README tells hosts to run
+    // cleanup nightly, so within a day of any human action a no-op cron would overwrite the
+    // only record that the human acted — buying observability for the sweep by destroying it
+    // for everyone else.
     const deleted = delivered.deleted + failed.deleted;
     await patchSettings(ctx, {
-      lastOperatorAction: {
-        kind: "cleanup" as const,
-        actor: recordActor(args.actor),
-        at: now,
-        count: deleted,
-      },
+      lastCleanupAt: now,
+      ...(deleted > 0
+        ? {
+            lastOperatorAction: {
+              kind: "cleanup" as const,
+              actor: recordActor(args.actor),
+              at: now,
+              count: deleted,
+            },
+          }
+        : {}),
     });
 
     return {
@@ -363,9 +395,11 @@ export const cleanup = mutation({
  * so nothing has to look at it, which is also what would let a leak accumulate unseen if a
  * future path ever did write a pair and lose half of it.
  *
- * The default limit is small for the same reason the retention limit is large: at the
- * component's 512 KiB hard payload bound, reading 25 rows is about 13 MB, so this is sized
- * to stay inside a transaction at any payload size a host may configure.
+ * The default limit is small for the reason the retention limit is large: this scan reads
+ * whole payload rows and cannot know their size in advance, so unlike `cleanup` it cannot
+ * budget by bytes. At the 512 KiB hard bound five rows is about 2.6 MiB — see
+ * {@link DEFAULT_ORPHAN_SCAN_LIMIT} for the arithmetic. A host whose payloads are small
+ * should pass a larger limit; the ceiling is {@link MAX_ORPHAN_SCAN_LIMIT}.
  */
 export const reclaimOrphanedPayloads = mutation({
   args: { limit: v.optional(v.number()), cursor: v.optional(v.union(v.string(), v.null())) },
@@ -376,10 +410,10 @@ export const reclaimOrphanedPayloads = mutation({
     isDone: v.boolean(),
   }),
   handler: async (ctx, { limit, cursor }) => {
-    // No ceiling separate from the default: a host that knows its payloads are small should
-    // be able to ask for a page far larger than the conservative default, and the byte cost
-    // is theirs to reason about from the table in `DEFAULT_ORPHAN_SCAN_LIMIT`'s docblock.
-    const batch = boundedBatch(limit, DEFAULT_ORPHAN_SCAN_LIMIT, Number.MAX_SAFE_INTEGER);
+    // A ceiling well above the default: a host that knows its payloads are small should be
+    // able to ask for a much larger page, but not an unbounded one. This scan reads whole
+    // payload rows and cannot weigh them first, so the row count is its only bound.
+    const batch = boundedBatch(limit, DEFAULT_ORPHAN_SCAN_LIMIT, MAX_ORPHAN_SCAN_LIMIT);
     return sweepOrphanedPayloads(ctx, batch, cursor ?? null);
   },
 });

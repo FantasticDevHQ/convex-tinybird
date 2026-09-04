@@ -91,21 +91,69 @@ export const DEFAULT_DELIVERED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_FAILED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * How many rows one `cleanup` call removes, per state, by default.
+ * The share of one call's read budget a retention sweep may spend.
  *
- * Deleting a row costs one read of the event and one write; the payload is deleted by id and
- * read not at all, which is why `payloadId` exists. The limit is spent ONCE across both
- * states, not once each, so a full batch is `200 x 5.4 KB` read and the same written — about
- * 1.1 MiB each way against Convex's roughly 8 MiB per-call limit, whatever the mix of
- * delivered and failed rows.
+ * Convex's per-call read limit is roughly 8 MiB. 35% matches what `health` is sized against
+ * in `healthcost.test.ts`, so the two costly paths in this component use one number.
+ */
+export const SWEEP_READ_BUDGET_BYTES = Math.floor(8 * 1024 * 1024 * 0.35);
+
+/**
+ * What one swept event row costs to READ, counted twice.
  *
- * That is two hundred times the cost of one row and a fortieth of the budget, so the number
- * is chosen for how much work one transaction should reasonably do rather than because the
- * bytes bind.
+ * 5 459 bytes is the largest `events` row the contract permits, measured rather than
+ * estimated — `healthcost.test.ts` builds it and pins the number. It is counted twice
+ * because the sweep reads the row once from `by_state_updatedAt` and again when
+ * `ctx.db.delete(event._id)` fetches it (see {@link PAYLOAD_ROW_OVERHEAD_BYTES} for why a
+ * delete is a read). Convex may well charge that once; counting two is the safe direction
+ * and costs only sweep throughput.
+ */
+export const EVENT_ROW_READ_BYTES = 2 * 5_459;
+
+/**
+ * Everything a `payloads` row costs beyond the payload text itself: `_id`, `_creationTime`,
+ * `eventId` and the field names. Measured at ~134 bytes; 192 is rounded up.
  *
- * Reading the payload back to find it would put the cost on the payload size instead, which
- * is the coupling FTD-2525 removed: 200 rows at the default 64 KiB bound would be 12.9 MiB
- * and the call would throw.
+ * This constant exists because of a mistake worth recording. Every earlier version of this
+ * file claimed `ctx.db.delete(id)` "reads nothing", and sized the sweep on that. It is
+ * false. Convex's `delete_inner` calls `get_inner`, which calls
+ * `record_read_document(..., doc.size(), ..., &self.limits)` — `crates/database/src/
+ * transaction.rs:666`, `:1093`. A delete reads the WHOLE document and charges its bytes.
+ *
+ * So `payloadId` does not avoid reading the payload; it avoids one index lookup. The real
+ * cost of deleting an event is the event row plus its payload, and at the default 64 KiB
+ * bound a 200-row batch is about 13 MiB against an 8 MiB limit — the precise disaster the
+ * old docblock claimed the pointer prevented. Three rounds of review passed over it because
+ * no test can see it: `convex-test` enforces no byte limit.
+ */
+export const PAYLOAD_ROW_OVERHEAD_BYTES = 192;
+
+/**
+ * How many rows one `cleanup` call removes, across both states, by default.
+ *
+ * A ROW cap, and the weaker of the sweep's two bounds. The real bound is
+ * {@link SWEEP_READ_BUDGET_BYTES}, which the sweep spends against each row's stored
+ * `payloadBytes` as it walks. That is what makes the limit true rather than documented: the
+ * payload bound is a per-call host option that `cleanup` cannot see, so no fixed row count
+ * can be safe for every configuration. The bytes are on the rows themselves.
+ *
+ * Which bound binds depends on payload size, and each binds where it should:
+ *
+ * | payload size | cost per row | rows the byte budget allows | binds |
+ * |---|---|---|---|
+ * | ~200 B (typical) | ~11 KiB | ~260 | the row cap, at 200 |
+ * | 1 KiB | ~12 KiB | ~243 | the row cap, at 200 |
+ * | 64 KiB (default bound) | ~75 KiB | ~38 | the byte budget |
+ * | 512 KiB (hard cap) | ~523 KiB | ~5 | the byte budget |
+ *
+ * 200 is therefore chosen for how much work one transaction should reasonably do, which is
+ * what the old docblock claimed for it — the difference is that the claim is now true,
+ * because something else enforces the bytes.
+ *
+ * The sweep always removes at least one row even when that row alone exceeds the budget. A
+ * single row cannot approach the limit (the worst case is ~523 KiB against ~2.9 MiB), and
+ * refusing to make progress is the failure mode this component keeps rediscovering: a sweep
+ * that deletes nothing on every call never runs again.
  */
 export const DEFAULT_CLEANUP_LIMIT = 200;
 
@@ -120,9 +168,9 @@ export const DEFAULT_CLEANUP_LIMIT = 200;
  *
  * | payload bound | cost per scanned row | rows that fit |
  * |---|---|---|
- * | 1 KiB | ~6.6 KiB | ~440 |
- * | 64 KiB (default) | ~69 KiB | ~41 |
- * | 512 KiB (hard cap) | ~517 KiB | 5 |
+ * | 1 KiB | ~6.5 KiB | ~450 |
+ * | 64 KiB (default) | ~70 KiB | ~41 |
+ * | 512 KiB (hard cap) | ~518 KiB | 5 |
  *
  * Five, so the default is safe for ANY payload size a host may configure — and it is the
  * LARGEST value that is, since a sixth row at the hard cap crosses the ceiling. Both halves
@@ -140,6 +188,23 @@ export const DEFAULT_CLEANUP_LIMIT = 200;
  * the cost of a small default is more calls rather than an unreachable table.
  */
 export const DEFAULT_ORPHAN_SCAN_LIMIT = 5;
+
+/**
+ * The largest `limit` `reclaimOrphanedPayloads` will honour.
+ *
+ * A ceiling here and not on `cleanup`, which is the opposite of where you would expect one.
+ * `cleanup` needs none because it budgets by bytes: each event records its `payloadBytes`,
+ * so the sweep knows what a row costs before it deletes it. This scan cannot — it reads
+ * payload rows to discover whether they are orphans, and their size is only known once they
+ * have been read and paid for. The row count is the only bound available.
+ *
+ * 200 is what the 64 KiB default bound allows about five times over, and it is deliberately
+ * not safe at the 512 KiB hard cap: a host configuring payloads that large and then asking
+ * for 200 rows has overridden two defaults to get there. Removing the ceiling entirely,
+ * which an earlier revision did, let a host follow this file's own advice ("pass a larger
+ * one") into reading 70% of the call budget in a single scan.
+ */
+export const MAX_ORPHAN_SCAN_LIMIT = 200;
 
 /** How many earlier failures an event keeps alongside its newest one. */
 export const MAX_ERROR_HISTORY = 5;
@@ -392,6 +457,8 @@ export const vHeartbeat = v.object({
   lastDeliveredAt: v.optional(v.number()),
   lastError: v.optional(vDeliveryError),
   lastOperatorAction: v.optional(vOperatorAction),
+  /** When a retention sweep last ran, deleting anything or not. Absent until one has. */
+  lastCleanupAt: v.optional(v.number()),
 });
 export type Heartbeat = Infer<typeof vHeartbeat>;
 
@@ -416,6 +483,8 @@ export const vHealth = v.object({
   /** Newest failure, sanitized. Never a response body, a host or a token. */
   lastError: v.optional(vDeliveryError),
   lastOperatorAction: v.optional(vOperatorAction),
+  /** When a retention sweep last ran, deleting anything or not. Absent until one has. */
+  lastCleanupAt: v.optional(v.number()),
 });
 export type Health = Infer<typeof vHealth>;
 

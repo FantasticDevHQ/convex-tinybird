@@ -314,6 +314,34 @@ describe("the payload lives outside the counted row", () => {
     // And the paged path makes none, which is the whole point of the pointer.
     expect(readsIn("sweepExpired")).toBe(0);
 
+    // The per-function pins above bound the three functions they NAME, and nothing else. So
+    // the file's total is pinned too. Verification walked straight through the named-only
+    // version by extracting a helper — moving the per-row read into a new `auditPayload()`
+    // called from `sweepExpired`'s loop left all three assertions true and the suite green
+    // at 222/222. A read added to `scheduleDelivery` or `requeueDeadLetter` would do the
+    // same, and neither is named here.
+    //
+    // Two, matching the two pinned above. Together the assertions say: exactly these reads,
+    // in exactly these functions. Extracting a helper now fails on the total even though
+    // every per-function count still holds, which is the case the pins alone cannot see.
+    expect(reads["state.ts"]).toBe(2);
+
+    // The stale-pointer tolerance must ask the DATABASE, never the error message. Matching
+    // the message was a live production bug rather than a style preference: convex-test
+    // throws `Delete on non-existent doc` and the Convex backend throws `Delete on
+    // nonexistent document ID {id}` — different spellings of "nonexistent", and the
+    // hyphenated form appears nowhere in the backend. A guard written against the harness
+    // rethrew in production on the one case it existed to tolerate, restoring a permanent
+    // retention wedge, while every test stayed green because the harness produced the only
+    // string that satisfied it.
+    //
+    // No behavioural test can catch that, here or anywhere: the harness IS what the guard
+    // would be matching against. So the shape is asserted instead — the positive claim that
+    // it consults the database, and the negative one that it reads no message.
+    const deleteBody = bodyOf(state, "deleteEventWithPayload");
+    expect(deleteBody).toContain("await ctx.db.get(event.payloadId)");
+    expect(deleteBody).not.toMatch(/message/u);
+
     const justified = ["lib.ts", "lifecycle.ts", "state.ts"];
     const unexpected = Object.keys(reads).filter(
       (name) => !justified.includes(name) && reads[name] > 0,

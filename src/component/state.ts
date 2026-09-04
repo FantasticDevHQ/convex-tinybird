@@ -8,8 +8,10 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import {
   type BoundedCount,
   COUNT_CAP,
+  EVENT_ROW_READ_BYTES,
   type EventState,
   MAX_ERROR_HISTORY,
+  PAYLOAD_ROW_OVERHEAD_BYTES,
   type vDeliveryError,
   type vHeartbeat,
   type vOperatorAction,
@@ -36,6 +38,7 @@ export async function patchSettings(
     pausedReason?: Infer<typeof vPausedReason>;
     pausedAt?: number;
     lastOperatorAction?: Infer<typeof vOperatorAction>;
+    lastCleanupAt?: number;
   },
 ): Promise<void> {
   const settings = await ctx.db.query("settings").first();
@@ -109,6 +112,7 @@ export async function readHeartbeat(ctx: QueryCtx): Promise<Infer<typeof vHeartb
     lastDeliveredAt: settings?.lastDeliveredAt,
     lastError: settings?.lastError,
     lastOperatorAction: settings?.lastOperatorAction,
+    lastCleanupAt: settings?.lastCleanupAt,
   };
 }
 
@@ -260,11 +264,16 @@ export async function resolveExistingIdentity(
 /**
  * Deletes one event and the payload row it points at.
  *
- * The pointer is the whole reason this is cheap: `ctx.db.delete(id)` reads nothing, where
- * finding the row through `by_event` would return the payload text and put the sweep's cost
- * back on event size. The index lookup survives only as a fallback for a row whose pointer
- * was never recorded — a half-written path, or data predating the field — because leaking
- * the payload would be worse than paying for one read.
+ * The pointer saves the index LOOKUP, not the payload bytes. `ctx.db.delete(id)` reads the
+ * document it deletes and charges its size, so both paths pay for the payload; what the
+ * pointer avoids is scanning `by_event` to find it. The sweep's byte budget in
+ * `sweepExpired` is what keeps that cost bounded, and it is sized from each row's stored
+ * `payloadBytes` rather than from an assumption.
+ *
+ * The index lookup survives only as a fallback for a row whose pointer was never recorded —
+ * a half-written path, or data predating the field — because leaking the payload would be
+ * worse than paying for one read. Note that every row written before this component gained
+ * `payloadId` takes that fallback, so it is the FIRST sweep that pays it, not a rare one.
  */
 export async function deleteEventWithPayload(
   ctx: MutationCtx,
@@ -274,29 +283,33 @@ export async function deleteEventWithPayload(
     // Tolerates a STALE pointer, and this is not defensive padding. FTD-2531 dead-letters an
     // event whose payload row has gone, and nothing clears the pointer when that happens
     // because the row vanished by some means outside this component. Deleting a missing
-    // document throws `Delete on non-existent doc`, and the throw would take down the whole
-    // sweep — every later call hitting the same row and failing again, so retention never
-    // runs for anything until someone intervenes by hand.
+    // document throws, and the throw would take down the whole sweep — every later call
+    // hitting the same row and failing again, so retention never runs for anything until
+    // someone intervenes by hand.
     try {
       await ctx.db.delete(event.payloadId);
     } catch (error) {
-      // ONLY "already gone" is tolerated; anything else re-throws. A bare catch would
-      // swallow a wrong-table id, a write-limit error, or whatever a future Convex version
-      // raises — and the very next line deletes the event regardless, manufacturing exactly
-      // the orphan `reclaimOrphanedPayloads` exists to find. Losing a payload silently is
-      // worse than failing the sweep loudly.
+      // Asks the DATABASE whether the row is gone, rather than reading the error message.
+      // Gone is the outcome we wanted; a row that is still there means the delete failed
+      // for a real reason and the error is rethrown, because the next line deletes the
+      // event regardless and would otherwise manufacture exactly the orphan
+      // `reclaimOrphanedPayloads` exists to find.
       //
-      // Matched on the message because Convex offers no code for it. Brittle in the safe
-      // direction: if the wording changes this re-throws, so the wedge returns visibly
-      // rather than a real error being hidden.
+      // An earlier version of this matched `/non-existent doc/iu`, and that was a live
+      // production bug rather than a style point. The two spellings are NOT the same:
       //
-      // NOT pinned by a test, and it cannot be here — constructing a delete failure that is
-      // not "already gone" needs the harness to reject something, and convex-test accepts
-      // even an id from the wrong table. Said plainly because the tolerated case IS tested
-      // and it would be easy to read that as covering both branches.
-      if (!(error instanceof Error) || !/non-existent doc/iu.test(error.message)) {
-        throw error;
-      }
+      //   convex-test 0.0.55  `Delete on non-existent doc`
+      //   convex backend      `Delete on nonexistent document ID {id}`
+      //
+      // The hyphenated form appears nowhere in the backend, so in production that guard
+      // rethrew on the one case it existed to tolerate and restored the permanent wedge —
+      // while both tests covering the wedge stayed green, because the only string that
+      // satisfies the regex is one the harness invents. A test suite cannot catch that
+      // class of mistake at all: the harness IS the thing being matched against.
+      //
+      // The extra read costs nothing on the success path, and this branch turns on a
+      // database fact rather than a message, so it holds for any Convex version.
+      if ((await ctx.db.get(event.payloadId)) !== null) throw error;
     }
   } else {
     const stored = await ctx.db
@@ -323,7 +336,8 @@ export async function sweepExpired(
   state: "delivered" | "failed",
   cutoff: number,
   batch: number,
-): Promise<{ deleted: number; more: boolean }> {
+  byteBudget: number,
+): Promise<{ deleted: number; more: boolean; bytesSpent: number }> {
   // `updatedAt`, not `createdAt`: retention runs from when the event FINISHED. Both
   // `markDelivered` and `markFailed` set it as they move the row into its terminal state,
   // so for a swept row it is the moment it stopped being work.
@@ -333,14 +347,34 @@ export async function sweepExpired(
   // than any retention, so it would be swept on the very next pass — giving a dedupe window
   // of zero to exactly the events a producer is most likely to re-emit after noticing the
   // outage.
-  if (batch <= 0) return { deleted: 0, more: true };
+  if (batch <= 0) return { deleted: 0, more: true, bytesSpent: 0 };
   const found = await ctx.db
     .query("events")
     .withIndex("by_state_updatedAt", (q) => q.eq("state", state).lt("updatedAt", cutoff))
     .take(batch + 1);
-  const selected = found.slice(0, batch);
-  for (const event of selected) await deleteEventWithPayload(ctx, event);
-  return { deleted: selected.length, more: found.length > selected.length };
+
+  // Bounded by BYTES as well as by rows, because the row cap alone cannot be safe. Deleting
+  // a document reads it (see `PAYLOAD_ROW_OVERHEAD_BYTES`), the payload bound is a per-call
+  // host option this mutation cannot see, and 200 rows at the default 64 KiB bound is about
+  // 13 MiB against an 8 MiB limit. What the sweep CAN see is `payloadBytes`, recorded on
+  // each event when it was enqueued — so the budget is spent against the real sizes rather
+  // than against an assumption about them.
+  let bytesSpent = 0;
+  let deleted = 0;
+  for (const event of found.slice(0, batch)) {
+    const cost = EVENT_ROW_READ_BYTES + event.payloadBytes + PAYLOAD_ROW_OVERHEAD_BYTES;
+    // `deleted > 0` and not `>=`: the first row goes regardless of what it costs. One row
+    // cannot come near the limit — the worst case is about 523 KiB against 2.9 MiB — and a
+    // sweep that declines to make progress is the wedge this component keeps rediscovering.
+    // Refusing the largest row would strand it, and it sorts first in every later batch.
+    if (deleted > 0 && bytesSpent + cost > byteBudget) {
+      return { deleted, more: true, bytesSpent };
+    }
+    await deleteEventWithPayload(ctx, event);
+    bytesSpent += cost;
+    deleted += 1;
+  }
+  return { deleted, more: found.length > deleted, bytesSpent };
 }
 
 /**

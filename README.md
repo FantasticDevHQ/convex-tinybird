@@ -159,8 +159,9 @@ crons.daily("tinybird retention", { hourUTC: 4, minuteUTC: 0 }, internal.tinybir
 // convex/tinybird.ts
 export const sweep = internalMutation({
   handler: async (ctx) => {
-    // Bounded, like every loop against this component. Ten passes at the default limit is
-    // 2000 rows per state.
+    // Bounded, like every loop against this component. The limit is spent ONCE across both
+    // states, so ten passes is at most 2000 rows in total — not per state. Large payloads
+    // reach the sweep's byte budget first and each pass returns fewer.
     for (let pass = 0; pass < 10; pass += 1) {
       const { remaining } = await tinybird.cleanup(ctx, { actor: "nightly cron" });
       if (!remaining) break;
@@ -206,8 +207,9 @@ cost depend on your event size again.
 It is paginated: carry `cursor` forward until `isDone`. Without that it would rescan the same
 first page forever, because healthy rows are never deleted and so occupy it permanently. The
 default `limit` is 5, sized for the largest payload the component allows; if your events are
-small, pass a far larger one — roughly 43 at the default 64 KiB bound, and several hundred below
-that.
+small, pass a larger one — roughly 41 at the default 64 KiB bound and roughly 450 at 1 KiB,
+capped at 200. Unlike `cleanup` this scan cannot budget by bytes, because it reads payload rows
+to discover their size; the limit is the only bound it has.
 
 ## Replaying dead letters
 
