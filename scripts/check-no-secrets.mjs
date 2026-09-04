@@ -69,11 +69,41 @@ const FORBIDDEN_FILENAMES = new Set([".tinyb", ".env", ".env.local", ".env.produ
  * doing the documented thing. `git ls-files` asks the question the rule is actually about.
  */
 function trackedFiles(root) {
-  const out = execFileSync("git", ["ls-files", "-z", "--", "."], {
-    cwd: root,
-    encoding: "utf8",
-  });
-  return out.split("\0").filter(Boolean);
+  try {
+    const out = execFileSync("git", ["ls-files", "-z", "--", "."], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return out.split("\0").filter(Boolean);
+  } catch (error) {
+    // Outside a git checkout the question this check asks — "was a credential COMMITTED" — has
+    // no answer. Returning `[]` would report a clean bill of health for a check that never ran,
+    // which is the failure mode this gate exists to prevent, so it fails closed and says why.
+    // Falling back to a directory walk is NOT the fix: that answers a different question and
+    // fails on the gitignored `.env.local` the example's README tells you to create.
+    throw new Error(
+      `cannot list tracked files under ${root}. This check reads the git index, so it must run ` +
+        `inside a checkout.`,
+      { cause: error },
+    );
+  }
+}
+
+/**
+ * Whether a path is one of this gate's own fixtures.
+ *
+ * The fixtures are deliberate violations — one is a tracked `.tinyb`, the only way to prove the
+ * check can fail — and scanning them would make the real package permanently dirty.
+ *
+ * The exclusion is an exact PREFIX, never a name pattern. `includes("fixtures")` would exempt
+ * `src/fixtures/`, `example/convex/fixtures/`, or any directory a future author happens to name
+ * that way, and an exemption is the one kind of bug this gate cannot report: it fails open and
+ * stays green. Exported so that property is pinned by a test rather than asserted by this
+ * comment — a mutation to `includes` survived until it was.
+ */
+export function isFixturePath(file) {
+  return file.startsWith("scripts/fixtures/");
 }
 
 /** One failure per violation; an empty array means the package is clean. */
@@ -83,11 +113,7 @@ export function checkNoSecrets(packageRoot) {
   const failures = [];
 
   for (const file of trackedFiles(root)) {
-    // The gate's own fixtures are deliberate violations — one of them is a tracked `.tinyb`,
-    // which is the only way to prove the check can fail. Scanning them would make the real
-    // package permanently dirty. The exclusion is a fixed path rather than a name pattern so a
-    // genuine credential cannot land somewhere that merely looks like a fixture.
-    if (file.startsWith("scripts/fixtures/")) continue;
+    if (isFixturePath(file)) continue;
     if (FORBIDDEN_FILENAMES.has(file.split("/").at(-1) ?? "")) {
       failures.push(
         `${file}: credential state must not be committed. Add it to .gitignore and remove it ` +

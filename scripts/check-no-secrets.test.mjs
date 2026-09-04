@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { checkNoSecrets, TOKEN_ALLOWED_FILES } from "./check-no-secrets.mjs";
+import { checkNoSecrets, isFixturePath, TOKEN_ALLOWED_FILES } from "./check-no-secrets.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => join(here, "fixtures", name);
@@ -78,4 +78,15 @@ test("an ignored, untracked credential file is NOT rejected", () => {
   } finally {
     rmSync(stray, { force: true });
   }
+});
+
+test("the fixture exemption is an exact prefix, not any path containing 'fixtures'", () => {
+  // An exemption fails OPEN: a credential in an exempt path is passed in silence, and the gate
+  // stays green, so nothing else can report it. Loosening this to `includes("fixtures")` survived
+  // mutation testing precisely because the property was only claimed in a comment.
+  assert.equal(isFixturePath("scripts/fixtures/commits-credential/.tinyb"), true);
+  assert.equal(isFixturePath("src/fixtures/.tinyb"), false);
+  assert.equal(isFixturePath("example/convex/fixtures/.env"), false);
+  assert.equal(isFixturePath("tinybird/fixtures-for-demo/.tinyb"), false);
+  assert.equal(isFixturePath("my-scripts/fixtures/.tinyb"), false);
 });

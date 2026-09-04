@@ -40,6 +40,11 @@ describe("the reference datasource keeps the guarantees the component depends on
   it("declares event_id as a String, which is the one column the component requires", () => {
     // The component's only demand on the host's schema. Everything else here is the host's
     // choice, and this is the line that stops a rename from being a silent contract break.
+    // Two checks, and they are not redundant even though the regex below is stricter about the
+    // type. `declaredColumns()` parses the SCHEMA block, so it answers "is this column DECLARED";
+    // the regex reads raw file text and would be satisfied by the same words in a comment or in
+    // a different section. Keeping both means moving `event_id` out of SCHEMA fails here, and
+    // retyping it fails below.
     expect(declaredColumns()).toContain("event_id");
 
     // The TYPE, not just the name. Convex ids are strings, so a schema declaring `event_id` as
@@ -77,8 +82,14 @@ describe("the reference datasource keeps the guarantees the component depends on
       new URL("../../tinybird/pipes/events_by_type.pipe", import.meta.url),
       "utf8",
     );
-    // Measured rather than assumed: smoke.sh has observed 2 raw rows returning a count of 1.
-    // Without FINAL that query returns the raw count until merges happen to run.
+    // Measured rather than assumed: smoke.sh observes 3 raw rows returning a count of 1, and
+    // the same query without FINAL returning 3 at the same instant on the same data.
+    //
+    // This line said "2 raw rows" until re-verification caught it. Everywhere else in this change
+    // the 2 is framed as a misreading — it was a partially ingested table, not a merge — but here
+    // the repudiated number was still standing as the live evidence for the assertion below. A
+    // correction that misses one site leaves the wrong number in the one place that reads like
+    // proof.
     expect(pipe).toMatch(/FROM events FINAL/u);
   });
 });

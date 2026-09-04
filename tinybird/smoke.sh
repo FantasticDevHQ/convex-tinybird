@@ -13,7 +13,12 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-PORT="${TB_LOCAL_PORT:-7181}"
+# Fixed, not configurable. `TB_LOCAL_PORT` used to override this and could not work: `tb`
+# recognises Tinybird Local by the port 7181 specifically, not by the `--host` it is given, so on
+# any other port it aborts at `deploy` with "Tinybird local is not running" — after pulling the
+# image and waiting for health, so the failure arrives late and blames the wrong thing. An option
+# that cannot succeed is worse than no option.
+PORT=7181
 CONTAINER="tinybird-local-smoke"
 
 cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
@@ -66,8 +71,19 @@ done
 # so poll for 3 instead of guessing a duration, and let the deadline be the thing that reports.
 DEADLINE=$((SECONDS + 60))
 while :; do
-  RAW="$(raw_count)"
-  [ "${RAW:-0}" -ge 3 ] && break
+  # `|| true` on purpose. Under `set -e` with `pipefail`, a `raw_count` that emits no numeric
+  # line kills the script here with NO OUTPUT AT ALL, and the `2>/dev/null` inside it hides the
+  # cause. That fails safe — it can never produce a false PASS — but silently, which is the
+  # hardest kind of failure to act on.
+  RAW="$(raw_count || true)"
+  case "$RAW" in
+    *[!0-9]* | "")
+      echo "could not read a row count from the deployed table. The query returned:" >&2
+      tb --host "http://localhost:${PORT}" --token "$TOKEN" sql "SELECT count() AS raw FROM events" >&2 || true
+      exit 1
+      ;;
+  esac
+  [ "$RAW" -ge 3 ] && break
   [ "$SECONDS" -ge "$DEADLINE" ] && break
   sleep 1
 done
