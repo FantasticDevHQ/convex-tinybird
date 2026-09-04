@@ -194,7 +194,14 @@ export async function requeueAbandoned(
     // relabelled "No progress for 30 minutes" and each row's real 503 was pushed out of view —
     // inventing a fault for rows that are behaving exactly as designed, on the one surface an
     // operator would consult to find out why.
-    if (event.workId === undefined) {
+    // Gated on `pending`, and the gate is the whole point. This branch reasons about a row
+    // that was never delivering — but an ungated version also caught `delivering` rows with no
+    // pointer, where `scheduleDelivery` refuses (`state !== "pending"`), nothing is patched,
+    // and the row is therefore left exactly as found. Because it is never patched its
+    // `updatedAt` never moves, so it is stranded permanently while the call reports
+    // `remaining: false`: nothing to do. A `delivering` row with no pointer has no work item
+    // at all, which is the definition of abandoned, so it belongs on the rescue path below.
+    if (event.state === "pending" && event.workId === undefined) {
       // Nothing to do while paused: `scheduleDelivery` would decline, and patching would churn
       // `updatedAt` on rows that are fine.
       if (await scheduleDelivery(ctx, event._id)) requeued += 1;

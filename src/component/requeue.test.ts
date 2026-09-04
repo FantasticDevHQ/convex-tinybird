@@ -191,8 +191,10 @@ describe("requeueing work that stopped moving", () => {
     // and events will be lost instead of duplicated.
     // CONSTRUCTED, not injected, and that is a limitation worth stating rather than papering
     // over. Verification asked for the ticket's suggested injection — make `fetch` throw after
-    // the request — and I tried it: a throw runs `markAttemptFailed`, so the row ends `failed`
-    // or `pending`, never `delivering`. That exercises the dead-letter path, not this one.
+    // the request — and I tried it: a throw runs `markAttemptFailed`, which sets `pending`,
+    // never `delivering`. (`failed` arrives later, from `onDeliveryComplete`, once the retry
+    // budget is spent — an earlier version of this comment conflated the two.) Either way it
+    // exercises the retry and dead-letter paths, not this one.
     //
     // The state this test needs is what a process DEATH leaves: the request went out, and no
     // handler ran afterwards because there was no process left to run one. Nothing in-process
@@ -423,5 +425,27 @@ describe("requeueing work that stopped moving", () => {
         .unique(),
     );
     expect(poisoned?.lastError?.message).toContain("legacy-pointer");
+  });
+
+  it("rescues a delivering row that has no pointer at all", async () => {
+    // A regression the pointer-less branch introduced. That branch reasons about rows which
+    // were never delivering, but ungated it also caught `delivering` rows: `scheduleDelivery`
+    // refuses them (`state !== "pending"`), so nothing was patched, `updatedAt` never moved,
+    // and the row was stranded permanently while the call reported `remaining: false`.
+    //
+    // A `delivering` row with no pointer has no work item at all, which is exactly what
+    // abandoned means.
+    const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await parked(t, "no-pointer", {
+      state: "delivering",
+      ageMs: 30 * MINUTE,
+      settled: true,
+      keepPointer: false,
+    });
+
+    expect(await t.mutation(api.recovery.requeueStuck, {})).toMatchObject({ requeued: 1 });
+    expect(await stateOf(t, "no-pointer")).toMatchObject({ state: "pending", tagged: true });
   });
 });
