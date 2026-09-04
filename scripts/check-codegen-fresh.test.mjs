@@ -115,20 +115,45 @@ test("a FunctionReference left behind by a deleted public function is caught", (
   }
 });
 
-test("files Convex is correct to omit do not fail the gate", () => {
-  // Hole 3, the false-positive direction — the failure mode this script argues hardest against.
-  // A `.d.ts`, a helper with no top-level import/export, a dotfile, an editor tempfile and a
-  // name with a space are all things the bundler skips; demanding modules for them fails the
-  // gate on output that is perfectly fresh.
+/**
+ * One case per omission rule.
+ *
+ * These were a single test covering all five. It was adequate coverage and a poor diagnostic:
+ * mutation testing showed a regression in the `#`-tempfile rule producing output identical to a
+ * regression in the space rule, so the failure named the class and not the cause. Splitting costs
+ * four lines and makes the next mutant self-describing.
+ */
+for (const [rule, file, contents] of [
+  ["a .d.ts declaration file", "shims.d.ts", 'declare module "x";\n'],
+  ["any basename with two dots", "a.b.ts", "export const ab = 1;\n"],
+  ["a dotfile", ".hidden.ts", "export const h = 1;\n"],
+  ["an editor tempfile", "#tmp.ts", "export const t = 1;\n"],
+  ["a name containing a space", "has space.ts", "export const s = 1;\n"],
+  ["a file with no top-level import or export", "helper.ts", "const helper = 1;\n"],
+]) {
+  test(`${rule} is not demanded as a module`, () => {
+    // The false-positive direction, which is the failure mode this script argues hardest against:
+    // demanding a module the generator is correct never to emit fails the gate on output that is
+    // perfectly fresh.
+    const dir = copyPackage();
+    try {
+      writeFileSync(join(dir, "example", "convex", file), contents);
+      assert.deepEqual(checkCodegenFresh(dir), []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("an ordinary new module IS still demanded, so the omissions are not a blanket exemption", () => {
+  // Without this leg, widening the exclusions until everything is quiet would pass every test
+  // above — the obvious wrong way to make the false positives go away.
   const dir = copyPackage();
   try {
-    const convex = join(dir, "example", "convex");
-    writeFileSync(join(convex, "shims.d.ts"), 'declare module "x";\n');
-    writeFileSync(join(convex, "helper.ts"), "const helper = 1;\n");
-    writeFileSync(join(convex, ".hidden.ts"), "export const h = 1;\n");
-    writeFileSync(join(convex, "#tmp.ts"), "export const t = 1;\n");
-    writeFileSync(join(convex, "has space.ts"), "export const s = 1;\n");
-    assert.deepEqual(checkCodegenFresh(dir), []);
+    writeFileSync(join(dir, "example", "convex", "refunds.ts"), "export const r = 1;\n");
+    const failures = checkCodegenFresh(dir);
+    assert.equal(failures.length, 1);
+    assert.match(failures[0], /"refunds" exists in source and is not declared/u);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
