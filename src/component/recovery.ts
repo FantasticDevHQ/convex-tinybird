@@ -133,48 +133,48 @@ export async function requeueAbandoned(
   // found this mutant surviving and the honest answer is that it should: a test written to
   // kill it would have to assert something this guard does not actually decide.
   if (batch <= 0) return { requeued: 0, visited: 0, more: true, cursor: after };
-  const found = await ctx.db
-    .query("events")
-    .withIndex("by_state_updatedAt", (q) => {
-      const base = q.eq("state", state);
-      // The cursor is a LOWER bound on `updatedAt`, and without it this scan cannot make
-      // progress past live work. A row skipped for still working is never patched, so its
-      // `updatedAt` never moves, so it stays at the head of the index and `take(batch + 1)`
-      // reads the same page on every call for ever — `remaining: true` and `requeued: 0`,
-      // ten passes a night, indefinitely. Anything behind it is unreachable.
-      //
-      // That is not a corner case: it is the condition this cron exists to recover from.
-      // `maxParallelism` is 4, so a backlog of a few hundred puts the tail past the threshold
-      // while every item is queued and healthy, and long retry backoff does the same. Once a
-      // page of those sits at the head, they ARE the page.
-      //
-      // Verification demonstrated it on a real deployment against the previous revision: one
-      // abandoned row behind three live rows older than it was never rescued across ten
-      // passes, and became rescuable when the only change was making the live rows younger.
-      // `gte`, not `gt`, because `updatedAt` is not unique. Convex freezes `Date.now()` for a
-      // transaction, so a host enqueuing a batch gives every row an identical value — and so
-      // does this function to every row it rescues in one call. A strict `gt` on the last
-      // value seen therefore jumps the REST of a tied group, and if the leading members are
-      // live and never patched the group never shrinks, so every later run repeats the jump
-      // identically. Verification demonstrated it: six tied rows, the abandoned one fourth,
-      // never reached; the same fixture with distinct timestamps rescued it on pass one.
-      //
-      // The tie is then broken in memory against `_creationTime`, which the index orders by
-      // within equal `updatedAt`, so a row is neither skipped nor handled twice.
-      return after === null
-        ? base.lt("updatedAt", cutoff)
-        : base.gte("updatedAt", after.updatedAt).lt("updatedAt", cutoff);
-    })
-    .take(batch + 1);
-  const fresh =
-    after === null
-      ? found
-      : found.filter(
-          (event) =>
-            event.updatedAt > after.updatedAt ||
-            (event.updatedAt === after.updatedAt && event._creationTime > after.creationTime),
-        );
-  const selected = fresh.slice(0, batch);
+  // TWO ranges, because the cursor is a compound position and one range cannot express it.
+  // The index is `(state, updatedAt)` with `_creationTime` appended as Convex's tiebreaker, so
+  // "strictly after this row" is: the rest of the row's own `updatedAt` group, then everything
+  // with a later `updatedAt`.
+  //
+  // The obvious single range — `gte(updatedAt)` filtered in memory — is what this replaces, and
+  // it failed in two ways that share a cause: the page always began with rows already handled,
+  // and nothing could step past them.
+  //
+  //   A tied group larger than a page hid everything past position `batch + 1` for ever, since
+  //   `take` returned the same prefix on every call and the filter dropped all of it.
+  //   And the loop never terminated: once the cursor sat on the last row of the range, that row
+  //   was re-read, dropped by the filter, and reported as `more` — `remaining: true` for ever,
+  //   demonstrated on a real deployment as ten passes of the documented loop doing nothing.
+  //
+  // Selecting only rows that are genuinely after the cursor removes the prefix, so the page is
+  // always progress and `more` means what it says.
+  const tail =
+    after === null || after.updatedAt >= cutoff
+      ? []
+      : await ctx.db
+          .query("events")
+          .withIndex("by_state_updatedAt", (q) =>
+            q
+              .eq("state", state)
+              .eq("updatedAt", after.updatedAt)
+              .gt("_creationTime", after.creationTime),
+          )
+          .take(batch + 1);
+  const rest =
+    tail.length > batch
+      ? []
+      : await ctx.db
+          .query("events")
+          .withIndex("by_state_updatedAt", (q) =>
+            after === null
+              ? q.eq("state", state).lt("updatedAt", cutoff)
+              : q.eq("state", state).gt("updatedAt", after.updatedAt).lt("updatedAt", cutoff),
+          )
+          .take(batch + 1 - tail.length);
+  const found = [...tail, ...rest];
+  const selected = found.slice(0, batch);
 
   // One status call for the whole page. Asking per row would put a component call inside the
   // loop, which is the cost shape this package has repeatedly got wrong.
@@ -239,7 +239,9 @@ export async function requeueAbandoned(
   }
   // Computed from the UNFILTERED page, so a page full of live work still reports that more
   // rows are waiting rather than telling the host to stop.
-  const more = found.length > selected.length;
+  // Every row read is one the cursor had not reached, so a sentinel means real work behind us
+  // and its absence means the end of the range. That is what makes `remaining` terminate.
+  const more = found.length > batch;
   // The last row SELECTED, not the last row read. `take(batch + 1)` reads a sentinel to learn
   // whether more exists, and that row is not processed — advancing to it steps straight over
   // it, which is how the first version of this cursor skipped the very row it was reaching
@@ -249,13 +251,16 @@ export async function requeueAbandoned(
   // The fallback to the last row read covers the one case where nothing was selected: a tied
   // group larger than a page, where every row was dropped by the tie-break. There, stepping
   // over what was read is the only way to make progress.
-  const last = selected.at(-1) ?? found.at(-1);
+  const last = selected.at(-1);
   return {
     requeued,
     visited: selected.length,
     more,
     // Null on a short page, so the next pass restarts at the beginning — which is what makes
-    // rows skipped for being alive get looked at again once their work has finished.
+    // rows skipped for being alive get looked at again once their work has finished. This is
+    // only true because every row read is genuinely after the cursor: under the previous
+    // `gte` range a page of already-handled rows never looked short, so the cursor never
+    // nulled and this sentence described something that did not happen.
     cursor:
       more && last !== undefined
         ? { updatedAt: last.updatedAt, creationTime: last._creationTime }
@@ -281,6 +286,17 @@ export async function requeueAbandoned(
  * is sent again; deduplication is Tinybird's, on `event_id`. The alternative — assuming an
  * unacknowledged send succeeded — is at-most-once, and loses events instead of duplicating
  * them.
+ *
+ * **Why the cursor is the caller's and not an internal loop.** Scanning until the budget ran
+ * out inside one call would work — a SKIPPED row costs one event-row read, not the four a
+ * rescued one costs, so roughly 537 of them fit inside {@link SWEEP_READ_BUDGET_BYTES}, far
+ * more than one page. That is worth stating precisely because the tempting shorter argument
+ * ("a call cannot read past one page") is false.
+ *
+ * The reason is cost shape, not reach: an in-call loop makes the transaction scale with the
+ * size of the crowd rather than with the batch, which is the failure this package keeps
+ * rediscovering — a row cap that does not bound bytes. A cursor holds per-call cost constant
+ * and moves the unboundedness into the caller's loop, where a pass count bounds it.
  */
 export const requeueStuck = mutation({
   args: {

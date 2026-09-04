@@ -294,4 +294,101 @@ describe("how the scan walks", () => {
     }
     expect(await stateOf(t, "behind")).toMatchObject({ tagged: false });
   });
+
+  it("terminates instead of reporting more for ever", async () => {
+    // The documented loop used to spin. With a `gte` range the cursor row was re-read on the
+    // next pass, dropped by the in-memory tie-break, and reported as `more` — so `remaining`
+    // stayed true and the cursor never advanced. It only showed when the final page was
+    // VISITED BUT NOT PATCHED, which is exactly the saturated-pool case the cursor exists for,
+    // because a rescued row's `updatedAt` moves and it leaves the range.
+    //
+    // Verification demonstrated it on a real deployment: ten passes, all `requeued: 0,
+    // remaining: true`. The harness hid it, because fake timers move `Date.now()` between
+    // calls so the cutoff drifts and the two legs look alike — this test freezes the ages by
+    // parking rows well inside the cutoff rather than relying on the clock standing still.
+    const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    for (let i = 0; i < 5; i += 1) {
+      await parked(t, `live-${i}`, {
+        state: "pending",
+        ageMs: (40 + i) * MINUTE,
+        settled: false,
+      });
+    }
+
+    let cursor:
+      | Awaited<ReturnType<typeof t.mutation<typeof api.recovery.requeueStuck>>>["cursor"]
+      | undefined;
+    let passes = 0;
+    for (; passes < 20; passes += 1) {
+      const result = await t.mutation(api.recovery.requeueStuck, { limit: 3, cursor });
+      cursor = result.cursor;
+      if (!result.remaining) break;
+    }
+
+    // It ends, and well inside the README's ten passes. Without this the loop burns every
+    // transaction it is given, every cron run, in the condition it exists for.
+    expect(passes).toBeLessThan(10);
+  });
+
+  it("reaches a row past the first page of a tied group", async () => {
+    // A tied group LARGER than a page. A `gte` range re-read the tie from its start, so
+    // `take(batch + 1)` returned the same prefix every call and everything past position
+    // `batch + 1` was invisible for ever. At the default limit that is a group of 51, which a
+    // host enqueueing 52 events in one mutation produces directly — Convex freezes
+    // `Date.now()` per transaction, so they all share one `updatedAt`.
+    //
+    // Eight rows, limit 3, the abandoned one seventh: outside the first page by construction.
+    const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    const ids = ["a0", "a1", "a2", "a3", "a4", "a5", "victim", "a7"];
+    for (const id of ids) {
+      await t.mutation(api.lib.enqueue, { datasource: "events", eventId: id, payload: row });
+    }
+    const stale = await t.run(async (ctx) => {
+      const event = await ctx.db
+        .query("events")
+        .withIndex("by_identity", (q) => q.eq("datasource", "events").eq("eventId", "victim"))
+        .unique();
+      return event?.workId;
+    });
+    await drain(t);
+
+    const tied = Date.now() - 30 * MINUTE;
+    await t.run(async (ctx) => {
+      for (const event of await ctx.db.query("events").take(50)) {
+        await ctx.db.patch(event._id, { state: "pending", updatedAt: tied });
+      }
+      const victim = await ctx.db
+        .query("events")
+        .withIndex("by_identity", (q) => q.eq("datasource", "events").eq("eventId", "victim"))
+        .unique();
+      await ctx.db.patch(victim!._id, { workId: stale });
+    });
+    await t.mutation(api.lib.resume, {});
+
+    // Precondition: the victim really is past the first page, or this proves nothing.
+    const order = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query("events")
+          .withIndex("by_state_updatedAt", (q) => q.eq("state", "pending"))
+          .take(50)
+      ).map((event) => event.eventId),
+    );
+    expect(order.indexOf("victim")).toBeGreaterThan(3);
+
+    let cursor:
+      | Awaited<ReturnType<typeof t.mutation<typeof api.recovery.requeueStuck>>>["cursor"]
+      | undefined;
+    for (let pass = 0; pass < 10; pass += 1) {
+      const result = await t.mutation(api.recovery.requeueStuck, { limit: 3, cursor });
+      cursor = result.cursor;
+      if (!result.remaining) break;
+    }
+
+    expect(await stateOf(t, "victim")).toMatchObject({ tagged: true });
+  });
 });
