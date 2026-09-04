@@ -66,6 +66,14 @@ function clientMethods(root) {
  * Public component functions that have no client method — the names a consumer guide can mention
  * bare and mislead with. Derived, never hand-listed: see check 3 for why an allowlist of
  * legitimate words is the wrong shape here.
+ *
+ * The oracle is `lib.ts` ALONE, which is narrower than "the component". A public function
+ * defined in another component module is outside the set — `recovery.ts` exports `requeueStuck`,
+ * for instance, though that one has a client method and so would not qualify anyway. The
+ * direction of that limit matters: it can only ever MISS a name, never invent one, so the check
+ * cannot fail on correct prose. If a future component-side function lands outside `lib.ts` with
+ * no client method, check 3 will not see it, and the fix is to widen this read rather than to
+ * start listing names.
  */
 function componentOnlyNames(root, methods) {
   const lib = readFileSync(join(root, "src", "component", "lib.ts"), "utf8");
