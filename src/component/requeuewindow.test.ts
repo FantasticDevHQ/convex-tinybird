@@ -383,13 +383,18 @@ describe("how the scan walks", () => {
     let cursor:
       | Awaited<ReturnType<typeof t.mutation<typeof api.recovery.requeueStuck>>>["cursor"]
       | undefined;
-    for (let pass = 0; pass < 10; pass += 1) {
+    let passes = 0;
+    for (; passes < 10; passes += 1) {
       const result = await t.mutation(api.recovery.requeueStuck, { limit: 3, cursor });
       cursor = result.cursor;
       if (!result.remaining) break;
     }
 
     expect(await stateOf(t, "victim")).toMatchObject({ tagged: true });
+    // And it TERMINATES. Rescuing the victim is not enough on its own: making the `rest` range
+    // inclusive still finds it while re-reading the cursor row on every pass, so the loop runs
+    // to its cap reporting `remaining: true` for ever. Only the pass count separates those.
+    expect(passes).toBeLessThan(9);
   });
 
   it("reaches a delivering row past the first page of a tied group", async () => {
@@ -461,5 +466,35 @@ describe("how the scan walks", () => {
     }
 
     expect(await stateOf(t, "victim")).toMatchObject({ tagged: true });
+  });
+
+  it("will not let a caller's cursor reach past the threshold", async () => {
+    // `cursor` is a second caller-supplied input that reaches the same hazard `olderThanMs` is
+    // validated for. The tail range is `eq("updatedAt", after.updatedAt)` and carries no
+    // `lt(cutoff)` bound of its own, so the guard on the tail is the ONLY thing stopping a
+    // cursor that points at a recent timestamp from returning rows the threshold excludes.
+    //
+    // What that costs if it goes is not a wasted read: it is a young row with a live delivery
+    // being handed a second work item — the FTD-2531 defect the whole `statusBatch` redesign
+    // exists to prevent, reached through the cursor rather than the clock. Verification found
+    // the guard unpinned and said this was the single test it most wanted to exist, because
+    // the history of this ticket is that an unpinned guard becomes the next defect.
+    const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await parked(t, "young", { state: "delivering", ageMs: 1 * MINUTE, settled: true });
+    const young = await t.run(async (ctx) => ctx.db.query("events").first());
+
+    // A cursor aimed squarely at the young row: its own `updatedAt`, and a creation time below
+    // it so the tie-break cannot exclude it either.
+    const result = await t.mutation(api.recovery.requeueStuck, {
+      cursor: {
+        delivering: { updatedAt: young!.updatedAt, creationTime: 0 },
+        pending: null,
+      },
+    });
+
+    expect(result.requeued).toBe(0);
+    expect(await stateOf(t, "young")).toMatchObject({ state: "delivering", tagged: false });
   });
 });
