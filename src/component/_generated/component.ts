@@ -227,6 +227,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { remaining: boolean; replayed: number },
         Name
       >;
+      requeueStuck: FunctionReference<
+        "mutation",
+        "internal",
+        { actor?: string; limit?: number; olderThanMs?: number },
+        { remaining: boolean; requeued: number },
+        Name
+      >;
       resume: FunctionReference<
         "mutation",
         "internal",

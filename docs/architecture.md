@@ -11,6 +11,40 @@ or roll back together. Delivery to the Tinybird Events API happens afterwards, a
 through a nested Workpool, at least once. Tinybird is expected to dedupe by `event_id`
 (a `ReplacingMergeTree` keyed on it); the component never claims exactly-once delivery.
 
+## Rows that stop moving, and why at-least-once follows from it
+
+The state machine has **no timer of its own**. Every transition out of `delivering` is driven by
+the Workpool item running that delivery, so a process that dies mid-flight leaves the row
+`delivering` with nothing watching it. It counts as unfinished in `health` for ever, and the
+backlog it contributes to never drains. `requeueStuck` is the only thing that looks.
+
+There are two ways a row strands, and only one of them is visible to the surfaces that already
+existed:
+
+**`delivering`, older than the threshold.** A crash between `markDelivering` and acknowledgement.
+Found by `by_state_updatedAt`, the same index retention uses.
+
+**`pending`, older than the threshold, still carrying a `workId`.** The row was released for
+retry and its Workpool item was then cancelled, or completed without calling back. `resume`
+cannot see it: that query is `by_state_workId_createdAt` filtered to `workId === undefined`,
+because an index lookup is the only shape that cannot be crowded out by rows it should skip. So
+the row looks healthy in `getStatus`, counts as unfinished in `health`, and drains never.
+`requeueStuck` finds it with the mirror of that query — `gt("workId", undefined)` — and clears
+the pointer so `resume` can reach it too.
+
+The threshold is what separates a stranded row from a slow one, and it is a trade rather than a
+measurement. Too short and a delivery that is merely slow is handed a second work item, which
+sends the event twice and gives it a second retry budget; too long and a crashed delivery sits
+untouched. Ten minutes is comfortably longer than any single request this component makes.
+
+**This is where at-least-once is paid for.** An event Tinybird accepted whose acknowledgement
+never reached us is _indistinguishable_ from one that was never sent — the row looks identical
+in both cases. So it is sent again, and deduplication is Tinybird's, on `event_id`. The
+alternative is to assume an unacknowledged send succeeded, which is at-most-once and loses
+events rather than duplicating them. Losing analytics events silently is worse than counting one
+twice, so the choice is deliberate; it is stated here because it is the kind of thing a reader
+otherwise discovers from a duplicate row in production.
+
 ## What the test suite cannot tell you
 
 `convex-test` runs the component's code as plain JavaScript. It does not know the code is a
@@ -35,6 +69,14 @@ bail: `convex dev --once` refuses the push and you find out in seconds. `paginat
 cleanly and throws on the call — which is precisely why it survived four heads of review. When
 auditing for this class, the question is not "what do components forbid" but "what do they
 forbid _at call time_".
+
+A related trap, from the same review and worth the same prominence: **a test whose comment
+explains why it is weak is more dangerous than one that is obviously weak.** A guard was added
+with a note reasoning that a discriminating fixture would cost 24 MB and was therefore not worth
+building. The reasoning was wrong — the discriminating variable was free — but the comment
+converted an unexamined assumption into what read as a considered decision, so the next reader
+audited the argument instead of the assertion. If you catch yourself explaining in a comment why
+a test cannot check something, that is the moment to check whether it actually cannot.
 
 The rule that follows: **for anything touching a Convex API surface, a green suite is not
 evidence that the code runs.** Push the component to a real deployment and call the function.

@@ -224,6 +224,30 @@ export class TinybirdDelivery {
     return ctx.runMutation(this.component.lib.reclaimOrphanedPayloads, args);
   }
 
+  /**
+   * Returns rows that have stopped moving to `pending` and puts them back on the pool.
+   *
+   * The component's state machine has no timer. Every transition out of `delivering` is driven
+   * by the Workpool item running that delivery, so a process that dies mid-flight leaves the
+   * row `delivering` with nothing watching it — it counts as unfinished in `health` for ever
+   * and the backlog never drains.
+   *
+   * Schedule it alongside `cleanup`, and run it FIRST: a rescued row becomes `pending` and is
+   * therefore outside retention either way, so the ordering is free, whereas the reverse
+   * leaves a stuck row unexamined for a whole interval.
+   *
+   * **This is where at-least-once is paid for.** An event Tinybird accepted whose
+   * acknowledgement never reached us is indistinguishable from one never sent, so it is sent
+   * again. Deduplicate on `event_id` in Tinybird. The alternative — assuming an unacknowledged
+   * send succeeded — is at-most-once, which loses events rather than duplicating them.
+   */
+  async requeueStuck(
+    ctx: RunMutationCtx,
+    args: { olderThanMs?: number; limit?: number; actor?: string } = {},
+  ): Promise<{ requeued: number; remaining: boolean }> {
+    return ctx.runMutation(this.component.lib.requeueStuck, args);
+  }
+
   /** Replay one dead letter by its identity. */
   async replayEvent(
     ctx: RunMutationCtx,

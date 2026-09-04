@@ -11,6 +11,7 @@ import {
   recordActor,
   requeueDeadLetter,
   resolveExistingIdentity,
+  requeueAbandoned,
   scheduleDelivery,
 } from "./state";
 import {
@@ -37,6 +38,8 @@ import {
   DEFAULT_DELIVERED_RETENTION_MS,
   DEFAULT_FAILED_RETENTION_MS,
   DEFAULT_ORPHAN_SCAN_LIMIT,
+  DEFAULT_STUCK_AFTER_MS,
+  DEFAULT_STUCK_LIMIT,
   MAX_ORPHAN_SCAN_LIMIT,
   SWEEP_READ_BUDGET_BYTES,
 } from "./budget";
@@ -496,5 +499,56 @@ export const replayEvent = mutation({
       },
     });
     return { replayed };
+  },
+});
+
+/**
+ * Returns rows that have stopped moving to `pending` and puts them back on the pool.
+ *
+ * The state machine has no timer of its own. Every transition out of `delivering` is driven
+ * by the Workpool item running the delivery, so if the process carrying that item dies, the
+ * row stays `delivering` and nothing ever looks at it again. `health` counts it as unfinished
+ * for ever and the outbox reports a backlog that nothing drains.
+ *
+ * Host-scheduled, like `cleanup`, and for the same reason: the component owns no cron. Run it
+ * BEFORE `cleanup` in the same job — a rescued row is `pending` and therefore outside
+ * retention, so the ordering costs nothing, whereas the reverse leaves a stuck row unexamined
+ * for one whole interval.
+ *
+ * This is where the at-least-once contract is paid for. An event Tinybird accepted whose
+ * acknowledgement never reached us is indistinguishable from one that was never sent, so it
+ * is sent again; deduplication is Tinybird's, on `event_id`. The alternative — assuming an
+ * unacknowledged send succeeded — is at-most-once, and loses events instead of duplicating
+ * them.
+ */
+export const requeueStuck = mutation({
+  args: {
+    olderThanMs: v.optional(v.number()),
+    limit: v.optional(v.number()),
+    actor: v.optional(v.string()),
+  },
+  returns: v.object({ requeued: v.number(), remaining: v.boolean() }),
+  handler: async (ctx, args) => {
+    // Validated rather than clamped, exactly as the retention thresholds are, and for the
+    // identical hazard: Convex orders `NaN` above every finite number, so a cutoff of `NaN`
+    // makes `lt("updatedAt", cutoff)` match every row and this call would re-send everything
+    // in flight. A negative threshold puts the cutoff in the future and does the same.
+    const olderThanMs = args.olderThanMs ?? DEFAULT_STUCK_AFTER_MS;
+    if (!Number.isFinite(olderThanMs) || olderThanMs < 0) {
+      throw new ConvexError({ code: "invalid_threshold" as const, olderThanMs });
+    }
+
+    const budget = boundedBatch(args.limit, DEFAULT_STUCK_LIMIT, DEFAULT_STUCK_LIMIT);
+    const cutoff = Date.now() - olderThanMs;
+
+    // One budget across both scans, not one each — the same rule `cleanup` follows, so that a
+    // caller passing `limit: 3` bounds the transaction rather than authorising six rescues.
+    const crashed = await requeueAbandoned(ctx, "delivering", cutoff, budget);
+    const stranded = await requeueAbandoned(ctx, "pending", cutoff, budget - crashed.visited);
+
+    return {
+      requeued: crashed.requeued + stranded.requeued,
+      remaining: crashed.more || stranded.more,
+    };
   },
 });

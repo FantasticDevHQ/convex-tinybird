@@ -205,3 +205,33 @@ export const DEFAULT_ORPHAN_SCAN_LIMIT = 2;
  * advice to "pass a larger one" into reading several times the whole call budget.
  */
 export const MAX_ORPHAN_SCAN_LIMIT = 20;
+
+/**
+ * How long a row may sit in one state before `requeueStuck` treats it as abandoned.
+ *
+ * Ten minutes, and the number is a trade rather than a measurement. Too short and a delivery
+ * that is merely slow gets a second work item, which sends the event twice; too long and a
+ * crashed delivery sits in `delivering` where nothing retries it, because the state machine
+ * has no timer of its own — the Workpool item that would have advanced it died with the
+ * process.
+ *
+ * Ten minutes is comfortably longer than any single request this component makes: the
+ * per-call ceiling is {@link REQUEST_TIMEOUT_RANGE_MS}'s maximum, and a full retry chain at
+ * the maximum backoff is still well inside it. So a row this old is not slow, it is stranded.
+ */
+export const DEFAULT_STUCK_AFTER_MS = 10 * 60 * 1000;
+
+/**
+ * How many rows one `requeueStuck` call rescues, across BOTH scans.
+ *
+ * Rows here carry no payload — `payloadBytes` lives on the row but the text does not — so the
+ * cost is event rows rather than blobs, and it is bounded by the row count in a way the
+ * retention sweep could not be. Per rescued row: the index read, `scheduleDelivery`'s own
+ * `ctx.db.get`, and its settings read. Against the largest event the contract permits that is
+ * about 11 KB, so 100 rows is roughly 1.1 MiB — under 40% of {@link SWEEP_READ_BUDGET_BYTES}
+ * and well inside the per-call limit.
+ *
+ * Matched to `DEFAULT_RESUME_LIMIT` deliberately: both put waiting work back on the pool, and
+ * a host that has sized its cron for one has sized it for the other.
+ */
+export const DEFAULT_STUCK_LIMIT = 100;

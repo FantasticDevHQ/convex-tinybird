@@ -159,6 +159,14 @@ crons.daily("tinybird retention", { hourUTC: 4, minuteUTC: 0 }, internal.tinybir
 // convex/tinybird.ts
 export const sweep = internalMutation({
   handler: async (ctx) => {
+    // Rescue first, sweep second. A row that has stopped moving is returned to `pending`
+    // and is outside retention either way, so the ordering costs nothing — but the reverse
+    // leaves a stuck row unexamined for a whole interval.
+    for (let pass = 0; pass < 10; pass += 1) {
+      const { remaining } = await tinybird.requeueStuck(ctx, { actor: "nightly cron" });
+      if (!remaining) break;
+    }
+
     // Bounded, like every loop against this component. The limit is spent ONCE across both
     // states, so ten passes is at most 2000 rows in total — not per state. Large payloads
     // reach the sweep's byte budget first and each pass returns fewer.

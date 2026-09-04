@@ -493,3 +493,75 @@ export async function sweepOrphanedPayloads(
     isDone,
   };
 }
+
+/**
+ * Returns one page of abandoned rows to `pending` and puts them back on the pool.
+ *
+ * Two scans, because a row stops moving in two different ways and only one of them is
+ * visible to the surfaces that already exist:
+ *
+ *   `delivering` and old — a process died between `markDelivering` and acknowledgement. The
+ *     Workpool item that would have advanced it went with the process, and nothing else
+ *     watches this state, so the row waits for ever.
+ *   `pending` with a `workId` and old — the row was released for retry and its Workpool item
+ *     was then cancelled or completed without calling back. `resume` cannot see it: that
+ *     query is `by_state_workId_createdAt` filtered to `workId === undefined`, because an
+ *     index lookup is the only shape that cannot be crowded out by rows it should skip. So
+ *     the row looks healthy in `getStatus`, counts as unfinished in `health`, and drains
+ *     never.
+ *
+ * The second scan uses `gt("workId", undefined)`, which is the mirror of resume's `eq` and is
+ * an index range rather than a filter for the same reason: filtering would let old pending
+ * rows WITHOUT a `workId` occupy the window and hide the ones behind them. Verified on a real
+ * deployment before being relied on — `convex-test` cannot settle whether a range over an
+ * optional field behaves the same way in production, and on this component it has twice
+ * certified something the backend refuses.
+ */
+export async function requeueAbandoned(
+  ctx: MutationCtx,
+  state: "delivering" | "pending",
+  cutoff: number,
+  batch: number,
+): Promise<{ requeued: number; visited: number; more: boolean }> {
+  if (batch <= 0) return { requeued: 0, visited: 0, more: true };
+  const found =
+    state === "delivering"
+      ? await ctx.db
+          .query("events")
+          .withIndex("by_state_updatedAt", (q) =>
+            q.eq("state", "delivering").lt("updatedAt", cutoff),
+          )
+          .take(batch + 1)
+      : await ctx.db
+          .query("events")
+          .withIndex("by_state_workId_createdAt", (q) =>
+            q.eq("state", "pending").gt("workId", undefined),
+          )
+          .take(batch + 1);
+
+  // The pending scan is ordered by `createdAt`, not `updatedAt`, because that is the index
+  // that can answer "has a workId" at all. So age is filtered here rather than ranged, and
+  // the window can contain young rows. Requeueing one of those would hand a live delivery a
+  // second work item and therefore a second retry budget — the FTD-2531 defect — so the age
+  // check is the thing standing between this function and re-sending everything in flight.
+  const eligible = state === "pending" ? found.filter((e) => e.updatedAt < cutoff) : found;
+  const selected = eligible.slice(0, batch);
+
+  let requeued = 0;
+  for (const event of selected) {
+    await ctx.db.patch(event._id, {
+      state: "pending",
+      // Cleared so `resume` can see the row too. Leaving it set is precisely what made the
+      // second stranding path invisible.
+      workId: undefined,
+      updatedAt: Date.now(),
+      lastError: {
+        category: "stuck" as const,
+        message: `No progress for ${Math.round((Date.now() - event.updatedAt) / 60000)} minutes`,
+        at: Date.now(),
+      },
+    });
+    if (await scheduleDelivery(ctx, event._id)) requeued += 1;
+  }
+  return { requeued, visited: selected.length, more: eligible.length > selected.length };
+}
