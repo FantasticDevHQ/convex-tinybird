@@ -1,0 +1,27 @@
+# A generic, duplicate-safe landing table for events delivered by the Convex component.
+#
+# The component guarantees AT-LEAST-ONCE delivery: an event Tinybird accepted whose
+# acknowledgement never reached the sender is indistinguishable from one never sent, so it is
+# sent again. That is a deliberate choice — the alternative loses events rather than
+# duplicating them — and it makes the engine here part of the contract rather than a detail.
+#
+# ReplacingMergeTree keyed on `event_id` collapses repeats. `version` decides which copy wins
+# when the same id arrives twice with different contents, so a corrected re-send supersedes the
+# original rather than racing it.
+#
+# The component sends the row VERBATIM: it never adds, renames or drops a column. The host owns
+# this schema. The only thing the component requires is that `event_id` equals the envelope's
+# `eventId`, because that is what makes a re-send the same row rather than a new one.
+
+SCHEMA >
+    `event_id` String `json:$.event_id`,
+    `event_type` LowCardinality(String) `json:$.event_type`,
+    `occurred_at` DateTime64(3, 'UTC') `json:$.occurred_at`,
+    `received_at` DateTime64(3, 'UTC') `json:$.received_at` DEFAULT now64(3),
+    `version` UInt32 `json:$.version` DEFAULT 1,
+    `payload` String `json:$.payload`
+
+ENGINE "ReplacingMergeTree"
+ENGINE_VER "version"
+ENGINE_SORTING_KEY "event_id"
+ENGINE_PARTITION_KEY "toYYYYMM(occurred_at)"
