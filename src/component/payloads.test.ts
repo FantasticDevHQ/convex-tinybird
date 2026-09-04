@@ -6,6 +6,7 @@ import {
   codeOf,
   drain,
   enqueueOne,
+  enqueueWithRetry,
   installComponentTestHooks,
   jsonResponse,
   row,
@@ -251,6 +252,135 @@ describe("the payload lives outside the counted row", () => {
     expect(init.body).toBe(`${canonicalJson(row)}\n`);
     // The failure that caused it is kept, because "why did this die" survives a repair.
     expect(healed?.previousErrors?.map((e) => e.category)).toContain("payload_missing");
+  });
+
+  it("does not hand a repaired event a second work item", async () => {
+    // Repairing a row that is still `pending` was re-creating this ticket's own defect.
+    // `requeueDeadLetter` schedules unconditionally, so the row got a SECOND work item while
+    // the first was still queued. Its `workId` then pointed at the new one, so when the
+    // original exhausted, `onDeliveryComplete` saw a mismatch, treated its own verdict as
+    // stale, and discarded it — leaving a `pending` row with its whole budget spent and no
+    // dead letter. Invisible to `replayFailed`, counted by `health` as ordinary backlog, and
+    // then handed a SECOND full budget by `resume`: six requests under a `maxAttempts: 3`
+    // policy, which is verbatim the harm `resume`'s own index comment exists to prevent.
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(500, { error: "down" }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await enqueueWithRetry(t, 3);
+    // Deleted while the row is still `pending` with live work — the normal timing for any
+    // host that re-enqueues on its own schedule, or an operator repairing before the drain.
+    await t.run(async (ctx) => {
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+    });
+    await t.mutation(api.lib.enqueue, { datasource: "events", eventId: "evt_1", payload: row });
+    await drain(t);
+
+    // The budget is spent exactly once and the row is a dead letter, matching what the same
+    // fixture produces with no repair at all.
+    const after = await statusOf(t);
+    expect(after).toMatchObject({ state: "failed", attempts: 3 });
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+
+    // And resume cannot grant a second budget, because there is nothing left pending.
+    expect(await t.mutation(api.lib.resume, {})).toMatchObject({ requeued: 0 });
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("restores the payload of an in-flight event without disturbing it", async () => {
+    // The third state a repair can find, and the one that must NOT be requeued: a
+    // `delivering` row is mid-attempt by definition, so returning it to `pending` would be
+    // the same double-delivery the guard exists to prevent. Recovering one that is genuinely
+    // stuck is FTD-2500's job, not enqueue's.
+    //
+    // This is also what stops the returned `state` being a prediction. Every other repair
+    // path requeues, so `pending` was true by accident; here it is not.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, accepted)));
+    const t = setup("");
+    await enqueueOne(t);
+    const id = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
+    await t.mutation(internal.lib.markDelivering, { eventId: id });
+    await t.run(async (ctx) => {
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+    });
+
+    expect(await enqueueOne(t)).toEqual({
+      outcome: "repaired",
+      eventId: "evt_1",
+      state: "delivering",
+    });
+    // The payload is back, so the attempt in flight can still complete.
+    expect(await t.run((ctx) => ctx.db.query("payloads").first())).not.toBeNull();
+    // And it was not knocked back to pending behind that attempt's back.
+    expect(await statusOf(t)).toMatchObject({ state: "delivering" });
+  });
+
+  it("refuses to repair with different content of the SAME length", async () => {
+    // The case a byte-length check cannot see, and the one that dominates real payloads:
+    // uuids, ISO-8601 timestamps, enum codes, booleans, zero-padded ids, numerics of equal
+    // digit count. A host bug that flips a status or swaps an id produces exactly this, and
+    // before the fingerprint the substituted payload was accepted AND delivered to Tinybird
+    // under an identity the host already treats as settled.
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await t.mutation(api.lib.enqueue, {
+      datasource: "events",
+      eventId: "evt_1",
+      payload: { a: "AAA" },
+    });
+    await t.run(async (ctx) => {
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+    });
+    await drain(t);
+
+    expect(
+      await codeOf(
+        t.mutation(api.lib.enqueue, {
+          datasource: "events",
+          eventId: "evt_1",
+          payload: { a: "ZZZ" },
+        }),
+      ),
+    ).toBe("identity_conflict");
+    // Nothing was written and nothing was sent under the substituted content.
+    expect(await t.run((ctx) => ctx.db.query("payloads").first())).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("checks the content of a DELIVERED event before calling it a duplicate", async () => {
+    // The repair branch must not be more permissive than the path beside it. Returning
+    // `duplicate` before comparing content meant a delivered event whose payload row had
+    // gone accepted anything at all — so a host relying on `identity_conflict` to catch a
+    // payload-generation bug lost that signal precisely when something was already known to
+    // be wrong.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, accepted)));
+    const t = setup();
+    await enqueueOne(t);
+    await drain(t);
+    expect(await statusOf(t)).toMatchObject({ state: "delivered" });
+    await t.run(async (ctx) => {
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+    });
+
+    // Different content: a conflict, exactly as it would be with the payload row present.
+    expect(
+      await codeOf(
+        t.mutation(api.lib.enqueue, {
+          datasource: "events",
+          eventId: "evt_1",
+          payload: { ...row, changed: true },
+        }),
+      ),
+    ).toBe("identity_conflict");
+
+    // Matching content: a duplicate, because there is nothing to resend and nothing to fix.
+    expect(await enqueueOne(t)).toMatchObject({ outcome: "duplicate", state: "delivered" });
+    // Not repaired: a delivered event gets no payload row back.
+    expect(await t.run((ctx) => ctx.db.query("payloads").first())).toBeNull();
   });
 
   it("refuses to repair a lost payload with a different one", async () => {

@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import type { Infer } from "convex/values";
 
 import { hasAppendToken, readAppendToken } from "./credentials";
@@ -170,4 +171,82 @@ export async function requeueDeadLetter(ctx: MutationCtx, event: Doc<"events">):
     updatedAt: Date.now(),
   });
   await scheduleDelivery(ctx, event._id);
+}
+
+/**
+ * What to do about an enqueue whose identity already exists.
+ *
+ * Three answers, and the order of the checks is load bearing. Content is compared FIRST, so
+ * every path below refuses a mismatch — the repair branch must never be more permissive than
+ * the ordinary duplicate path it sits beside, which it was when `delivered` returned early.
+ */
+export async function resolveExistingIdentity(
+  ctx: MutationCtx,
+  existing: Doc<"events">,
+  incoming: {
+    payload: string;
+    payloadBytes: number;
+    payloadHash: string;
+    stored: Doc<"payloads"> | null;
+  },
+): Promise<{ outcome: "duplicate" | "repaired"; eventId: string; state: EventState }> {
+  const conflict = () =>
+    new ConvexError({
+      code: "identity_conflict" as const,
+      datasource: existing.datasource,
+      eventId: existing.eventId,
+    });
+
+  if (incoming.stored !== null) {
+    if (incoming.stored.payload !== incoming.payload) throw conflict();
+    return { outcome: "duplicate", eventId: existing.eventId, state: existing.state };
+  }
+
+  // The payload row is gone, so the text cannot be compared. `payloadBytes` and
+  // `payloadHash` survive on the event row and are the only evidence left of what was
+  // committed.
+  if (
+    existing.payloadBytes !== incoming.payloadBytes ||
+    existing.payloadHash !== incoming.payloadHash
+  ) {
+    throw conflict();
+  }
+
+  // Already sent: nothing to restore and nothing to resend.
+  if (existing.state === "delivered") {
+    return { outcome: "duplicate", eventId: existing.eventId, state: existing.state };
+  }
+
+  // This is a `payload_missing` dead letter and THIS CALL IS THE ONLY THING THAT CAN FIX IT.
+  // `enqueue` is the sole surface that writes `payloads`, and a component's tables are
+  // unreachable from the host, so rejecting it would leave the row stuck permanently:
+  // selected by replay, never deliverable, never countable down.
+  await ctx.db.insert("payloads", { eventId: existing._id, payload: incoming.payload });
+
+  // Requeued ONLY when nothing is already working on it. `requeueDeadLetter` schedules
+  // unconditionally, and giving a row a second work item while the first is queued makes its
+  // `workId` point at the new one — so when the original finishes, `onDeliveryComplete` sees
+  // a mismatch, discards its own verdict as stale, and the row is left `pending` with its
+  // budget spent and no dead letter. That is this ticket's own defect arriving through a
+  // different door, and `resume` then hands it a second budget on top.
+  //
+  // A `delivering` row is never requeued whatever its `workId` says: it is mid-attempt by
+  // definition. Recovering one that is genuinely stuck is FTD-2500's job. The `pending`
+  // clause covers a row nothing ever scheduled, which is what a paused or unconfigured
+  // instance leaves behind.
+  if (
+    existing.state === "failed" ||
+    (existing.state === "pending" && existing.workId === undefined)
+  ) {
+    await requeueDeadLetter(ctx, existing);
+  }
+
+  // Read back rather than predicted: the branch above does not always run, so asserting
+  // `pending` here would be a guess that happens to be true today.
+  const repaired = await ctx.db.get(existing._id);
+  return {
+    outcome: "repaired",
+    eventId: existing.eventId,
+    state: repaired?.state ?? existing.state,
+  };
 }

@@ -74,9 +74,12 @@ The remedy is to enqueue the event again. `enqueue` is the only surface that wri
 and a component's tables are unreachable from the host, so a re-enqueue rejected as a conflict
 would leave the row stuck permanently: selected by replay, never deliverable, never countable
 down. Re-enqueueing the same identity when the payload row is absent therefore **restores** it and
-puts the event back to work, returning `repaired`. The payload cannot be compared, because it is
-gone; `payloadBytes` survives on the event row and is checked instead, so a repair with different
-content is still a conflict. An event already `delivered` is a duplicate, not a repair — there is
+puts the event back to work, returning `repaired`. The payload cannot be compared, because it is gone; `payloadBytes` and a
+fingerprint of the canonical text survive on the event row and are checked instead, so a repair
+with different content is a conflict. The fingerprint is FNV-1a and not cryptographic: it detects
+an accidental substitution, such as a host bug that flips a status or swaps an id, and does not
+pretend to stop a deliberate one. Byte length alone could not do even that much, because the field
+shapes that dominate real payloads are fixed width. An event already `delivered` is a duplicate, not a repair — there is
 nothing to resend.
 
 A response is one of three things: delivered, terminally failed, or worth another attempt.
@@ -141,7 +144,10 @@ one is `enqueue`'s job, not replay's —
 so replaying one is not the same as enqueueing
 it again: `(datasource, eventId)` is unchanged, which means a later enqueue with matching content
 is still a `duplicate` and one with different content is still an `identity_conflict`. Replay
-therefore cannot be used to smuggle a changed payload past the identity check.
+therefore cannot be used to smuggle a changed payload past the identity check. Repair is the one
+place that check is weaker: with the payload gone there is nothing to compare, so it falls back to
+the byte length and fingerprint on the event row, which catch an accidental substitution rather
+than a deliberate one.
 
 Attempts reset to zero because the retry budget is being granted afresh. The failure history does
 not reset, and the failure that caused the dead letter is pushed onto it, because after a replay

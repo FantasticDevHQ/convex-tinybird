@@ -1,7 +1,7 @@
 import { vOnCompleteArgs } from "@convex-dev/workpool";
 import { ConvexError, v } from "convex/values";
 
-import { canonicalJson, utf8Length } from "./canonical";
+import { canonicalJson, payloadFingerprint, utf8Length } from "./canonical";
 import { readAppendToken } from "./credentials";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import {
@@ -11,6 +11,7 @@ import {
   readHeartbeat,
   recordActor,
   requeueDeadLetter,
+  resolveExistingIdentity,
   scheduleDelivery,
 } from "./state";
 import { sanitizeMessage } from "./sanitize";
@@ -99,6 +100,7 @@ export const enqueue = mutation({
     }
     const payload = canonicalJson(args.payload);
     const payloadBytes = utf8Length(payload);
+    const payloadHash = payloadFingerprint(payload);
     const bound = Math.min(
       args.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES,
       HARD_MAX_PAYLOAD_BYTES,
@@ -123,38 +125,11 @@ export const enqueue = mutation({
         .query("payloads")
         .withIndex("by_event", (q) => q.eq("eventId", existing._id))
         .unique();
-      if (stored === null) {
-        // The event exists but its payload does not, so this is a `payload_missing` dead
-        // letter and THIS CALL IS THE ONLY THING THAT CAN FIX IT. `enqueue` is the sole
-        // surface that writes `payloads`, and a component's tables are unreachable from the
-        // host, so rejecting it as a conflict would leave the row stuck permanently:
-        // selected by replay, never deliverable, never countable down.
-        if (existing.state === "delivered") {
-          // Already sent. There is nothing to restore and nothing to resend.
-          return { outcome: "duplicate" as const, eventId, state: existing.state };
-        }
-        // The payload is gone, so it cannot be compared. `payloadBytes` survives on the
-        // event row and is the only evidence left of what was committed. A weak check, but
-        // the alternative is letting a repair silently substitute different content under an
-        // identity the host already treats as settled.
-        if (existing.payloadBytes !== payloadBytes) {
-          throw new ConvexError({
-            code: "identity_conflict" as const,
-            datasource: args.datasource,
-            eventId,
-          });
-        }
-        await ctx.db.insert("payloads", { eventId: existing._id, payload });
-        await requeueDeadLetter(ctx, existing);
-        return { outcome: "repaired" as const, eventId, state: "pending" as const };
-      }
-      if (stored.payload === payload) {
-        return { outcome: "duplicate" as const, eventId, state: existing.state };
-      }
-      throw new ConvexError({
-        code: "identity_conflict" as const,
-        datasource: args.datasource,
-        eventId,
+      return await resolveExistingIdentity(ctx, existing, {
+        payload,
+        payloadBytes,
+        payloadHash,
+        stored,
       });
     }
 
@@ -163,6 +138,7 @@ export const enqueue = mutation({
       datasource: args.datasource,
       eventId,
       payloadBytes,
+      payloadHash,
       state: "pending",
       attempts: 0,
       createdAt: now,
@@ -366,10 +342,13 @@ export const onDeliveryComplete = internalMutation({
     // row that has since been replayed marks an in-flight event as dead on the strength of
     // the attempt before it.
     //
-    // Both are refused by the same check. Today the verdict half is unreachable, because a
-    // row the pool reports `failed` for is `pending` rather than `failed` and so cannot be
-    // replayed; that is an argument about the current state machine rather than an
-    // invariant, and this is what makes it one.
+    // Both are refused by the same check, and BOTH halves are load bearing. The argument
+    // that the verdict half was unreachable — that a row the pool reports `failed` for is
+    // `pending` rather than `failed`, and so cannot have been replayed — stopped holding
+    // when FTD-2531 made `enqueue` able to requeue a `pending` row to repair a lost payload.
+    // A completion can now arrive for an item the row no longer holds while it is still
+    // `pending`, which is precisely how a repaired row lost its dead letter before the
+    // requeue itself was guarded.
     const finished = await ctx.db.get(eventId);
     if (finished === null || finished.workId !== workId) return null;
     await ctx.db.patch(eventId, { workId: undefined });

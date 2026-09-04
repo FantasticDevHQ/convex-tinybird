@@ -5,7 +5,7 @@ import { ConvexError } from "convex/values";
 import workpool from "@convex-dev/workpool/test";
 
 import { api } from "../component/_generated/api";
-import { utf8Length } from "../component/canonical";
+import { payloadFingerprint, utf8Length } from "../component/canonical";
 import type { DatabaseWriter } from "../component/_generated/server";
 import type { Doc, Id } from "../component/_generated/dataModel";
 import schema from "../component/schema";
@@ -50,7 +50,7 @@ export function setup(token = "p.token"): TestInstance {
  */
 export async function seedEvent(
   ctx: { db: DatabaseWriter },
-  fields: Omit<Doc<"events">, "_id" | "_creationTime" | "payloadBytes"> & {
+  fields: Omit<Doc<"events">, "_id" | "_creationTime" | "payloadBytes" | "payloadHash"> & {
     payload?: string;
   },
 ): Promise<Id<"events">> {
@@ -60,7 +60,11 @@ export async function seedEvent(
   // non-ASCII payload. Nothing reads this field today, which is exactly why it should be
   // right — the old inline fixtures had it wrong for both of their payloads and no test
   // noticed.
-  const id = await ctx.db.insert("events", { ...event, payloadBytes: utf8Length(payload) });
+  const id = await ctx.db.insert("events", {
+    ...event,
+    payloadBytes: utf8Length(payload),
+    payloadHash: payloadFingerprint(payload),
+  });
   await ctx.db.insert("payloads", { eventId: id, payload });
   return id;
 }

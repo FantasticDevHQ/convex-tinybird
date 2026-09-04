@@ -52,6 +52,29 @@ function encode(value: unknown, path: string, depth: number): string {
  * order. Two payloads with the same canonical form are the same event for dedupe purposes.
  * Throws `ConvexError({ code: "invalid_payload", reason })` for anything JSON cannot carry.
  */
+/**
+ * A deterministic fingerprint of a canonical payload.
+ *
+ * FNV-1a, 32 bits, hex. Not cryptographic and not meant to be: it exists to detect an
+ * ACCIDENTAL substitution — a host bug that flips a status or swaps an id — in the one
+ * situation where the payload itself is gone and cannot be compared. Byte length alone
+ * cannot do that job, because the field shapes that dominate real payloads are fixed width:
+ * uuids, ISO-8601 timestamps, enum codes, booleans, zero-padded ids, numerics of the same
+ * digit count. A same-length edit to any of those defeats a length check completely.
+ *
+ * Synchronous and dependency-free on purpose. `crypto.subtle` is async and its availability
+ * inside a mutation is not something to rely on, and this runs on the enqueue path.
+ */
+export function payloadFingerprint(canonical: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < canonical.length; i += 1) {
+    hash ^= canonical.charCodeAt(i);
+    // The FNV prime, as shifts, because the direct multiply overflows a double.
+    hash = (hash + ((hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24))) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
 export function canonicalJson(payload: unknown): string {
   if (!isPlainObject(payload)) {
     throw invalid("payload must be a JSON object (a Tinybird row), not an array or primitive");

@@ -24,6 +24,13 @@ export const events = defineTable({
    * in `payloads`, read only when delivering and when comparing a duplicate.
    */
   payloadBytes: v.number(),
+  /**
+   * Fingerprint of the canonical payload, kept here so a lost payload row can still be
+   * checked against what was committed. Length alone cannot do it: the field shapes that
+   * dominate real payloads are fixed width, so a flipped status or a swapped id has the
+   * same length as the value it replaced.
+   */
+  payloadHash: v.string(),
   state: vEventState,
   attempts: v.number(),
   createdAt: v.number(),

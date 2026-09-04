@@ -55,9 +55,23 @@ export const createOrder = mutation({
 });
 ```
 
-Identity is `(datasource, eventId)`. Re-enqueueing the same identity with an equivalent payload
-(any key order) returns `outcome: "duplicate"`; a different payload throws `ConvexError` with
-`code: "identity_conflict"`. Payloads must be JSON objects under 64 KiB (configurable up to 512 KiB).
+Identity is `(datasource, eventId)`. `enqueue` returns one of three outcomes, and a fourth
+possibility is a throw:
+
+| outcome     | meaning                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------- |
+| `enqueued`  | a new event, now queued                                                                     |
+| `duplicate` | the same identity with an equivalent payload (any key order); nothing changed               |
+| `repaired`  | the event existed but its payload row did not, and this call restored it                    |
+| _throws_    | `ConvexError` with `code: "identity_conflict"` — the same identity with a different payload |
+
+`repaired` is rare and worth surfacing rather than folding into `enqueued`: seeing it means
+something had previously deleted one of the two rows without the other. With the payload itself
+gone there is nothing to compare it against, so the check falls back to the byte length and
+content fingerprint kept on the event row — enough to catch an accidental substitution, not a
+deliberate one. See "Replaying dead letters" below.
+
+Payloads must be JSON objects under 64 KiB (configurable up to 512 KiB).
 
 ## Monitoring
 
@@ -155,8 +169,9 @@ events are replayed over and over while everything behind them is never reached 
 **One dead letter cannot be replayed away.** `payload_missing` means the event has no stored
 payload, so there is nothing to send and delivery will find nothing again however many times you
 replay it. Enqueue the same event a second time instead: `enqueue` restores the missing row and
-returns `repaired`. Anything else with that identity is still a conflict, checked against the
-byte length the event row kept.
+returns `repaired`. Anything else with that identity is a conflict, checked against the byte
+length and content fingerprint the event row kept — enough to catch an accidental substitution,
+not a deliberate one.
 
 **The operator controls are mount-wide.** `enqueue` and `getStatus` take a datasource, but
 `pause`, `resume`, `health` and `replayFailed` do not, so a mount carrying more than one
