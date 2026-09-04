@@ -105,8 +105,14 @@ export const SWEEP_READ_BUDGET_BYTES = Math.floor(8 * 1024 * 1024 * 0.35);
  * estimated — `healthcost.test.ts` builds it and pins the number. It is counted twice
  * because the sweep reads the row once from `by_state_updatedAt` and again when
  * `ctx.db.delete(event._id)` fetches it (see {@link PAYLOAD_ROW_OVERHEAD_BYTES} for why a
- * delete is a read). Convex may well charge that once; counting two is the safe direction
- * and costs only sweep throughput.
+ * delete is a read).
+ *
+ * Twice is exact, not merely cautious. Convex accumulates reads with
+ * `tx_size.total_document_size += document_size` and does not deduplicate by document id
+ * (`crates/database/src/reads.rs:486`), so reading the same row twice is charged twice. An
+ * earlier draft of this comment hedged that Convex "may well charge that once" — worth
+ * checking rather than hedging, since the hedge would have been an excuse to halve the
+ * constant later.
  */
 export const EVENT_ROW_READ_BYTES = 2 * 5_459;
 
