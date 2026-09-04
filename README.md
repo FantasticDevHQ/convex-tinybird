@@ -206,10 +206,15 @@ cost depend on your event size again.
 
 It is paginated: carry `cursor` forward until `isDone`. Without that it would rescan the same
 first page forever, because healthy rows are never deleted and so occupy it permanently. The
-default `limit` is 5, sized for the largest payload the component allows; if your events are
-small, pass a larger one — roughly 41 at the default 64 KiB bound and roughly 450 at 1 KiB,
-capped at 200. Unlike `cleanup` this scan cannot budget by bytes, because it reads payload rows
-to discover their size; the limit is the only bound it has.
+default `limit` is 2, sized for the largest payload the component allows; if your events are
+small, pass a larger one — roughly 22 at the default 64 KiB bound and roughly 440 at 1 KiB,
+capped at 20. Unlike `cleanup` this scan cannot budget by bytes, because it reads payload rows to
+discover their size; the limit is the only bound it has.
+
+The numbers are low because reclaiming an orphan pays for its payload **twice** — once to page
+it in, and again when `ctx.db.delete` re-reads the document it deletes. If you raise
+`maxPayloadBytes`, lower this limit to match: nothing can do it for you, since the scan never
+sees that option.
 
 ## Replaying dead letters
 

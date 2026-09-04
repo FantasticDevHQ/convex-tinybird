@@ -166,51 +166,58 @@ export const DEFAULT_CLEANUP_LIMIT = 200;
 /**
  * How many payload rows one `reclaimOrphanedPayloads` call examines.
  *
- * Small where the retention limit is large, and for the opposite reason. Deciding whether a
- * payload is an orphan costs TWO documents, not one: the payload row is read by the scan,
- * and then `ctx.db.get(stored.eventId)` reads the whole event to see whether it still
- * exists. Against roughly 8 MiB per call at a 35% share, with the event row measured at
- * 5 459 bytes by `healthcost.test.ts` and about 134 bytes of payload-row overhead:
+ * Small where the retention limit is large, and for a reason `cleanup` does not share: this
+ * scan cannot budget by bytes. `cleanup` knows what a row costs before touching it, because
+ * the event carries `payloadBytes`. This one learns a payload's size by reading it, so the
+ * cost is paid before it can be weighed and the row count is the only bound available.
  *
- * | payload bound | cost per scanned row | rows that fit |
- * |---|---|---|
- * | 1 KiB | ~6.5 KiB | ~450 |
- * | 64 KiB (default) | ~70 KiB | ~41 |
- * | 512 KiB (hard cap) | ~518 KiB | 5 |
+ * Each scanned row costs one of two things, and the budget takes the larger:
  *
- * Five, so the default is safe for ANY payload size a host may configure — and it is the
- * LARGEST value that is, since a sixth row at the hard cap crosses the ceiling. Both halves
- * are asserted, so this number cannot drift in either direction in silence.
+ *   healthy — `paginate` reads the payload, then `ctx.db.get(eventId)` reads the event.
+ *   orphan  — that get returns null and costs nothing, but `ctx.db.delete` re-reads the
+ *             payload it was already handed, because a delete reads the document it
+ *             deletes. So an orphan pays for its payload TWICE.
  *
- * Two earlier versions of this docblock were wrong in opposite ways, which is why the
- * arithmetic now lives in a test rather than only in prose. The first justified 25 rows as
- * "about 13 MB, sized to stay inside one transaction" — 13 MB being 156% of the budget the
- * rest of this component is sized against. The second corrected the value but still counted
- * only the payload, claiming "the byte cost is the payload size and not the row count".
- * That is true at the hard cap and badly false below it: at 1 KiB the event row is five
- * times the payload and dominates the scan completely.
+ * Which is worse flips where a payload outweighs an event row. Against roughly 8 MiB per
+ * call at a 35% share, with the event row measured at 5 459 bytes and the payload row's
+ * overhead at 134:
  *
- * A host whose events are small should pass a much larger `limit`; the scan is paginated, so
- * the cost of a small default is more calls rather than an unreachable table.
+ * | payload bound | healthy row | orphan row | rows that fit |
+ * |---|---|---|---|
+ * | 1 KiB | ~6.5 KiB | ~2.3 KiB | ~443 |
+ * | 64 KiB (default) | ~69 KiB | ~128 KiB | ~22 |
+ * | 512 KiB (hard cap) | ~518 KiB | ~1 MiB | 2 |
+ *
+ * Two, so the default is safe for ANY payload size a host may configure, and it is the
+ * largest value that is — a third row at the hard cap exceeds the share. Both halves are
+ * asserted in `healthcost.test.ts`, so it cannot drift in either direction in silence.
+ *
+ * Three earlier versions of this docblock were wrong, each in a way the next one inherited,
+ * which is why the arithmetic now lives in a test. The first justified 25 rows as "about
+ * 13 MB, sized to stay inside one transaction" — 156% of the budget. The second corrected
+ * the value but counted only the payload, so it was right at the hard cap and threefold out
+ * at 1 KiB. The third added the event read and still measured a HEALTHY row, understating
+ * the orphan case by 98% at the cap — the one case the function exists for.
+ *
+ * A host whose events are small should pass a larger `limit`; the scan is paginated, so the
+ * cost of a small default is more calls rather than an unreachable table.
  */
-export const DEFAULT_ORPHAN_SCAN_LIMIT = 5;
+export const DEFAULT_ORPHAN_SCAN_LIMIT = 2;
 
 /**
  * The largest `limit` `reclaimOrphanedPayloads` will honour.
  *
- * A ceiling here and not on `cleanup`, which is the opposite of where you would expect one.
- * `cleanup` needs none because it budgets by bytes: each event records its `payloadBytes`,
- * so the sweep knows what a row costs before it deletes it. This scan cannot — it reads
- * payload rows to discover whether they are orphans, and their size is only known once they
- * have been read and paid for. The row count is the only bound available.
+ * Sized for the DEFAULT payload bound rather than the hard cap: 20 orphans at 64 KiB is
+ * about 2.6 MiB, inside the share. A host that raises `maxPayloadBytes` must lower its
+ * limit to match, which is stated here because nothing can enforce it — the scan cannot see
+ * that option, and by the time it has read a row it has already paid for it.
  *
- * 200 is what the 64 KiB default bound allows about five times over, and it is deliberately
- * not safe at the 512 KiB hard cap: a host configuring payloads that large and then asking
- * for 200 rows has overridden two defaults to get there. Removing the ceiling entirely,
- * which an earlier revision did, let a host follow this file's own advice ("pass a larger
- * one") into reading 70% of the call budget in a single scan.
+ * A ceiling here and none on `cleanup`, which is the opposite of where you would expect one,
+ * for exactly the reason above: `cleanup` budgets by bytes and needs no row ceiling to stay
+ * safe. Removing this one, which an earlier revision did, let a host follow this file's own
+ * advice to "pass a larger one" into reading several times the whole call budget.
  */
-export const MAX_ORPHAN_SCAN_LIMIT = 200;
+export const MAX_ORPHAN_SCAN_LIMIT = 20;
 
 /** How many earlier failures an event keeps alongside its newest one. */
 export const MAX_ERROR_HISTORY = 5;

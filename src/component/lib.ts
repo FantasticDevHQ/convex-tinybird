@@ -397,8 +397,9 @@ export const cleanup = mutation({
  *
  * The default limit is small for the reason the retention limit is large: this scan reads
  * whole payload rows and cannot know their size in advance, so unlike `cleanup` it cannot
- * budget by bytes. At the 512 KiB hard bound five rows is about 2.6 MiB — see
- * {@link DEFAULT_ORPHAN_SCAN_LIMIT} for the arithmetic. A host whose payloads are small
+ * budget by bytes, and reclaiming an orphan pays for its payload twice — once to page it in,
+ * once when the delete re-reads it. At the 512 KiB hard bound that is about 1 MiB per row —
+ * see {@link DEFAULT_ORPHAN_SCAN_LIMIT} for the arithmetic. A host whose payloads are small
  * should pass a larger limit; the ceiling is {@link MAX_ORPHAN_SCAN_LIMIT}.
  */
 export const reclaimOrphanedPayloads = mutation({

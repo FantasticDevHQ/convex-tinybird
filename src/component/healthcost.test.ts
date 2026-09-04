@@ -2,12 +2,14 @@ import { installComponentTestHooks, seedEvent, setup } from "../testing/fixtures
 import {
   COUNT_CAP,
   DEFAULT_CLEANUP_LIMIT,
+  DEFAULT_MAX_PAYLOAD_BYTES,
   DEFAULT_ORPHAN_SCAN_LIMIT,
   EVENT_ROW_READ_BYTES,
   PAYLOAD_ROW_OVERHEAD_BYTES,
   SWEEP_READ_BUDGET_BYTES,
   HARD_MAX_PAYLOAD_BYTES,
   MAX_DATASOURCE_NAME_LENGTH,
+  MAX_ORPHAN_SCAN_LIMIT,
   MAX_ERROR_HISTORY,
   MAX_EVENT_ID_LENGTH,
   REQUEST_TIMEOUT_RANGE_MS,
@@ -229,12 +231,25 @@ describe("what a full orphan scan costs", () => {
   it("fits DEFAULT_ORPHAN_SCAN_LIMIT rows in the budget, and one more would not", async () => {
     const rows = await measureWorstCaseRow();
 
-    // The cost the old docblock missed entirely. `sweepOrphanedPayloads` reads the payload
-    // row AND then `ctx.db.get(stored.eventId)` to decide whether it is an orphan, so the
-    // per-row cost is both documents. The old comment said "the byte cost is the payload
-    // size and not the row count", which is only true at the hard cap; at a 1 KiB payload
-    // the EVENT row is five times the payload and dominates completely.
-    const perScannedRow = rows.payload + rows.event;
+    // There are TWO per-row costs and the budget has to take the larger. `paginate` reads
+    // every payload row. Then, per row, one of two things happens:
+    //
+    //   healthy — `ctx.db.get(stored.eventId)` reads the event row: payload + event.
+    //   orphan  — that get returns null and costs nothing, but `ctx.db.delete(stored._id)`
+    //             re-reads the payload it already has: payload TWICE.
+    //
+    // Which is larger flips at the point where a payload outweighs an event row. Below it
+    // an orphan is CHEAPER than a healthy row; at the hard cap it is nearly double. An
+    // earlier version of this test measured only the healthy pair, from a healthy fixture,
+    // and so understated the worst case by 98% at the cap — for the very case the function
+    // exists to handle. Same omission as the delete read one level down, found the same way.
+    const healthyRow = rows.payload + rows.event;
+    const orphanRow = 2 * rows.payload;
+    const perScannedRow = Math.max(healthyRow, orphanRow);
+
+    // Not a tautology: it pins WHICH case is worst at the bound the default is sized for, so
+    // the two terms cannot be silently swapped or one of them dropped.
+    expect(orphanRow).toBeGreaterThan(healthyRow);
 
     const budget = READ_BUDGET_BYTES * BUDGET_SHARE;
     const atDefault = DEFAULT_ORPHAN_SCAN_LIMIT * perScannedRow;
@@ -243,10 +258,24 @@ describe("what a full orphan scan costs", () => {
     expect(atDefault).toBeLessThan(budget);
 
     // And the tightness claim, which is what makes this a change detector rather than a
-    // bound with slack to drift inside. Five is not merely safe, it is the LARGEST safe
-    // default: a sixth row crosses the ceiling. So raising the default, widening the hard
-    // payload cap, or adding a field to either row all land here.
+    // bound with slack to drift inside. The default is the LARGEST value that fits: one more
+    // row does not. So raising the default, widening the hard payload cap, or adding a field
+    // to either row all land here.
+    //
+    // "Does not fit" means it exceeds the 35% share this component budgets against, NOT that
+    // Convex would throw — the real limit is nearly three times that. The share is the
+    // self-imposed headroom, and the wording matters because an earlier version read as
+    // though one more row would crash.
     expect((DEFAULT_ORPHAN_SCAN_LIMIT + 1) * perScannedRow).toBeGreaterThan(budget);
+
+    // The CEILING is a separate claim and needs its own assertion. It is sized for the
+    // DEFAULT payload bound rather than the hard cap, because a host that has raised
+    // `maxPayloadBytes` has to lower its limit and nothing can enforce that for it — the
+    // scan cannot see the option, and by the time it has read a row it has paid for it.
+    // Without this the docblock's "20 orphans at 64 KiB is about 2.6 MiB" is prose.
+    const overhead = rows.payload - HARD_MAX_PAYLOAD_BYTES;
+    const orphanAtDefaultBound = 2 * (DEFAULT_MAX_PAYLOAD_BYTES + overhead);
+    expect(MAX_ORPHAN_SCAN_LIMIT * orphanAtDefaultBound).toBeLessThan(budget);
   });
 });
 
