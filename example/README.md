@@ -31,6 +31,27 @@ pnpm --filter @fantastic-dev/convex-tinybird-example run typecheck
 CONVEX_AGENT_MODE=anonymous pnpm --filter @fantastic-dev/convex-tinybird-example exec convex dev --once
 ```
 
+**Credentials must be set on the DEPLOYMENT, not in your shell.** The `process.env.…` reads in
+`convex.config.ts` are evaluated by the backend inside an isolate, so they resolve against the
+deployment's environment — a shell variable and a `.env.local` both leave the mounts
+unconfigured, and the component is _inert_ when unconfigured: enqueue still stores events,
+nothing is scheduled, and no request leaves. There is no error anywhere. Verification reproduced
+all three legs; only this works:
+
+```bash
+cd packages/convex-tinybird/example
+CONVEX_AGENT_MODE=anonymous npx convex env set PRODUCT_TINYBIRD_TOKEN p.your_token
+CONVEX_AGENT_MODE=anonymous npx convex env set AUDIT_TINYBIRD_TOKEN   p.your_token
+CONVEX_AGENT_MODE=anonymous npx convex dev --once     # re-push so the mounts pick them up
+```
+
+Check it took: `health.configured` must be `true` on both mounts. If it is `false`, the tokens
+did not reach the deployment and every enqueue will sit there silently.
+
+Note that `pnpm codegen` in this package's `package.json` is **not** the command to run: app-level
+`convex codegen` needs a deployment and fails with `No CONVEX_DEPLOYMENT set` on a fresh clone.
+Use the `convex dev --once` line above, which provisions one and generates.
+
 The last command provisions a local deployment and regenerates `convex/_generated`, which is
 committed. It also rewrites the component's own `_generated`, because a component's generated
 code is produced by pushing a host that mounts it — `convex codegen --component-dir` needs a real

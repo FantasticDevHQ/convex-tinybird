@@ -115,9 +115,38 @@ describe("adopting the component in an unrelated app", () => {
     expect(paused.paused).toBe(true);
     expect(untouched.paused).toBe(false);
 
-    // Each mount saw exactly its own event, not the other's.
-    const productRows = await t.run(async (ctx) => ctx.db.query("orders").take(10));
-    expect(productRows).toHaveLength(1);
+    // Each mount holds ONLY its own event, checked by asking each one for the other's.
+    //
+    // The previous version of this counted rows in the host's `orders` table, which has
+    // nothing to do with either mount and is invariant under every event-isolation defect
+    // there is — the comment claimed event isolation and the assertion checked that one
+    // `place` inserted one order. Verification found it, and it is the third fixture on this
+    // component that asserted something true and unrelated.
+    const order = await t.run(async (ctx) => ctx.db.query("orders").first());
+
+    const productSeesOwn = await t.query(components.productEvents.lib.getStatus, {
+      datasource: "orders",
+      eventId: order!._id,
+    });
+    const productSeesAudit = await t.query(components.productEvents.lib.getStatus, {
+      datasource: "audit",
+      eventId: order!._id,
+    });
+    const auditSeesOwn = await t.query(components.auditEvents.lib.getStatus, {
+      datasource: "audit",
+      eventId: order!._id,
+    });
+    const auditSeesProduct = await t.query(components.auditEvents.lib.getStatus, {
+      datasource: "orders",
+      eventId: order!._id,
+    });
+
+    // Both halves matter. Only the "sees own" pair would pass for a component whose mounts
+    // share one table; only the "sees other" pair would pass for one that stores nothing.
+    expect(productSeesOwn).not.toBeNull();
+    expect(auditSeesOwn).not.toBeNull();
+    expect(productSeesAudit).toBeNull();
+    expect(auditSeesProduct).toBeNull();
   });
 
   it("accepts the same identity in both instances, and rejects a conflict within one", async () => {

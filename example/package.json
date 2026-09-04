@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Minimal Convex app that mounts two named instances of the Tinybird component. Exists to prove the component is portable: it depends on convex and the component and nothing else.",
   "scripts": {
-    "codegen": "convex codegen",
+    "codegen": "CONVEX_AGENT_MODE=anonymous convex dev --once",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
