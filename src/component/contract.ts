@@ -21,15 +21,28 @@ export const DEFAULT_MAX_PAYLOAD_BYTES = 65_536;
 export const HARD_MAX_PAYLOAD_BYTES = 524_288;
 /** Event identity length bound; identities are host-provided opaque strings. */
 export const MAX_EVENT_ID_LENGTH = 256;
-/** Tinybird datasource names: letters, digits and underscores only. */
-export const DATASOURCE_NAME_PATTERN = /^[A-Za-z0-9_]{1,128}$/;
+/** Longest Tinybird datasource name this component accepts. */
+export const MAX_DATASOURCE_NAME_LENGTH = 128;
+
+/**
+ * Tinybird datasource names: letters, digits and underscores only.
+ *
+ * Built from {@link MAX_DATASOURCE_NAME_LENGTH} rather than repeating it, so a test that
+ * needs the longest legal name derives it from the bound instead of from a literal that
+ * happens to agree with the bound today.
+ */
+export const DATASOURCE_NAME_PATTERN = new RegExp(
+  `^[A-Za-z0-9_]{1,${MAX_DATASOURCE_NAME_LENGTH}}$`,
+  "u",
+);
 /**
  * How many dead letters one `replayFailed` call returns to the queue by default.
  *
  * Sized from bytes when the payload still lived on the event row, where a batch of `n` cost
  * `3n + 1` passes over rows of `payload + ~2 KB` and 100 rows came to roughly 19 MiB against
  * Convex's ~8 MiB per-call limit. FTD-2525 moved the payload to its own table, so a row is
- * now about 2 KB whatever the event carries, and the same batch of 30 costs under 200 KB.
+ * now independent of the event's size, and the same batch of 30 costs well under a megabyte
+ * rather than the 5.9 MiB it did — about 490 KB at the row's documented worst case.
  *
  * These values are therefore CONSERVATIVE rather than binding, and deliberately unchanged
  * by that move: raising them is a behaviour change that deserves its own tests rather than

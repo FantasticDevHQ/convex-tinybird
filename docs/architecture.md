@@ -118,7 +118,8 @@ rather than `rows`: at the component's default 64 KiB payload bound a `health` c
 roughly 130 unfinished events, and at the 512 KiB hard cap at about 16 — the query whose whole
 purpose was to stay cheap, failing outright on exactly the backlog it exists to report. The
 payload now lives in `payloads`, keyed by event and read only when delivering and when
-comparing a duplicate, so an event row is about 2 KB whatever the event carries and the row
+comparing a duplicate, so an event row costs the same whatever the event carries — bounded at
+about 5.4 KB by the contract's own caps, and typically far less — and the row
 cap is once again the thing that binds.
 
 That made the cap reachable for the first time, and FTD-2530 then sized it from a measured row
@@ -149,8 +150,9 @@ count one document, but every transition would then write to a single row, tradi
 for write contention on the ingest path. Lowering the cap costs only precision in an answer that
 is already deliberately imprecise.
 
-That failure was a property of the schema rather than of the query, which is why the fix was a
-schema change and not a smaller cap.
+That failure was a property of the schema, and moving the payload out of the row is what fixed
+it. Doing so exposed the cap underneath, which needed a smaller number as well — the two are
+successive constraints, not competing explanations.
 
 `heartbeat` predates that fix and stays. It returns the same fields minus the counts and reads
 exactly two documents — the settings row and the oldest waiting event — so `paused` and
@@ -200,7 +202,7 @@ still reports that nothing remains. Filtering by category correctly means indexi
 filtering a page, which is tracked separately. To replay one specific event, use `replayEvent`.
 
 Replay reads and writes only `events` rows, never `payloads`, so its cost is the row count times
-about 2 KB. A host that raises `maxPayloadBytes` no longer has to lower `limit` to compensate:
+independent of the payload. A host that raises `maxPayloadBytes` no longer has to lower `limit`:
 payload size and batch size are now independent, which is the point of the split.
 
 Ordering by `updatedAt` has millisecond granularity, so rows patched inside one mutation tie and

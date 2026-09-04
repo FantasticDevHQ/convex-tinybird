@@ -76,13 +76,13 @@ Payloads must be JSON objects under 64 KiB (configurable up to 512 KiB).
 ## Monitoring
 
 `health` is the operator view. Each state is counted through an index and stops at a cap, so the
-query reads at most 150 rows per state and never scans the table. A capped count reports
+query reads at most 151 rows per state — the cap plus one, which is how it knows there are more — and never scans the table. A capped count reports
 `capped: true` rather than an exact number, because "more than 150 waiting" is the answer
 an operator acts on.
 
 **Know the real cost before you rely on it.** Convex reads whole documents and allows about 8 MiB
 per function call, so what matters is rows multiplied by row size. The cap bounds the rows, and
-since the payload moved to its own table an event row is about 2 KB whatever your events carry —
+since the payload moved to its own table an event row no longer depends on your event size at all —
 so **event size no longer affects `health` at all**. Before that split it did: a call failed at
 roughly 130 unfinished events at the default 64 KiB payload bound, which is the query whose whole
 purpose was to stay cheap failing on exactly the backlog it exists to report.
@@ -183,7 +183,7 @@ other's dead letters too. Mount the component once per datasource.
 
 **The default batch is 20, and the ceiling is 30.** Both were sized from bytes when the payload
 still lived on the event row, where a batch of 100 cost roughly 19 MiB against Convex's ~8 MiB
-per-call limit. The payload now lives in its own table, so an event row is about 2 KB whatever
+per-call limit. The payload now lives in its own table, so an event row costs the same whatever
 your events carry and the same batch costs well under a megabyte.
 
 So payload size and batch size are independent: raising `maxPayloadBytes` no longer means

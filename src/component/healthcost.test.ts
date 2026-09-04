@@ -1,5 +1,13 @@
 import { installComponentTestHooks, seedEvent, setup } from "../testing/fixtures";
-import { COUNT_CAP, MAX_ERROR_HISTORY, MAX_EVENT_ID_LENGTH } from "./contract";
+import {
+  COUNT_CAP,
+  HARD_MAX_PAYLOAD_BYTES,
+  MAX_DATASOURCE_NAME_LENGTH,
+  MAX_ERROR_HISTORY,
+  MAX_EVENT_ID_LENGTH,
+  REQUEST_TIMEOUT_RANGE_MS,
+  RETRY_LIMITS,
+} from "./contract";
 import { MAX_ERROR_MESSAGE_LENGTH } from "./sanitize";
 
 installComponentTestHooks();
@@ -25,15 +33,24 @@ const BUDGET_SHARE = 0.35;
  * the ceiling bit. Pinning the row size instead means anything that changes what a row costs
  * has to come here and update the number, which is where the arithmetic lives.
  *
- * The tolerance exists because `_creationTime` is a float whose decimal representation
- * varies by a few characters between runs. Three percent is far tighter than any real field
- * addition and far looser than that noise.
+ * The tolerance exists only because `_creationTime` is a float whose decimal representation
+ * varies by a few characters between runs — single digits of bytes on a row of 5412. Half a
+ * percent is 27 bytes: comfortably above that noise, and tight enough to catch the smallest
+ * bound change that matters. At three percent a widened datasource name slipped through
+ * unnoticed, which is the failure mode this constant exists to prevent.
  */
-const WORST_CASE_ROW_BYTES = 5370;
-const ROW_TOLERANCE = 0.03;
+const WORST_CASE_ROW_BYTES = 5412;
+const ROW_TOLERANCE = 0.005;
 
 /** `health` counts three states, each reading one row past the cap. */
 const STATES_COUNTED = 3;
+
+/**
+ * `health` is `readHeartbeat` plus the three counts, and the heartbeat reads two documents
+ * of its own — the settings row and the oldest waiting event. Two rows against 453 is
+ * immaterial, but the sum is presented as the whole cost of the call, so it should be.
+ */
+const HEARTBEAT_DOCUMENTS = 2;
 
 /**
  * Builds the largest `events` row the contract permits, and measures it.
@@ -52,27 +69,37 @@ async function measureWorstCaseRow(): Promise<number> {
   // — so it buys less under a length cap. An ASCII fixture measures a third of the truth.
   const fill = (units: number) => "\u4e2d".repeat(units);
   const error = (i: number) => ({
-    category: "server_error" as const,
+    // The longest member of the category union.
+    category: "payload_too_large" as const,
     httpStatus: 503,
     message: fill(MAX_ERROR_MESSAGE_LENGTH),
     at: Date.now() + i,
   });
   await t.run(async (ctx) => {
     await seedEvent(ctx, {
-      // The datasource pattern is `[A-Za-z0-9_]`, so this one really is ASCII-bound.
-      datasource: "d".repeat(128),
+      // ASCII-bound for real: the pattern admits only `[A-Za-z0-9_]`. Derived from the
+      // contract's own constant rather than a literal, so widening the bound moves this
+      // fixture with it instead of leaving the two agreeing with each other and disagreeing
+      // with the contract.
+      datasource: "d".repeat(MAX_DATASOURCE_NAME_LENGTH),
       eventId: fill(MAX_EVENT_ID_LENGTH),
-      state: "failed" as const,
-      attempts: 5,
+      // `delivering` is a counted state and four bytes longer than `failed`.
+      state: "delivering" as const,
+      attempts: RETRY_LIMITS.maxAttempts.max,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       deliveredAt: Date.now(),
       lastError: error(0),
       previousErrors: Array.from({ length: MAX_ERROR_HISTORY }, (_, i) => error(i + 1)),
       workId: "w".repeat(32),
-      retry: { maxAttempts: 5, initialBackoffMs: 100, base: 2 },
-      requestTimeoutMs: 30_000,
-      payload: '{"seed":1}',
+      retry: {
+        maxAttempts: RETRY_LIMITS.maxAttempts.max,
+        initialBackoffMs: RETRY_LIMITS.initialBackoffMs.max,
+        base: RETRY_LIMITS.base.max,
+      },
+      requestTimeoutMs: REQUEST_TIMEOUT_RANGE_MS.max,
+      // The payload lives in its own table, but its SIZE stays on this row.
+      payload: "x".repeat(HARD_MAX_PAYLOAD_BYTES),
     });
   });
   const row = await t.run(async (ctx) => ctx.db.query("events").first());
@@ -96,7 +123,7 @@ async function measureWorstCaseRow(): Promise<number> {
 
   expect(row?.eventId).toHaveLength(MAX_EVENT_ID_LENGTH);
   expect(Buffer.byteLength(row?.eventId ?? "", "utf8")).toBe(MAX_EVENT_ID_LENGTH * 3);
-  expect(row?.datasource).toHaveLength(128);
+  expect(row?.datasource).toHaveLength(MAX_DATASOURCE_NAME_LENGTH);
 
   // The optional fields too: a maximal row has all of them, and deleting any one shrinks it
   // while every assertion above stays true.
@@ -128,7 +155,7 @@ describe("what a full health call costs", () => {
     expect(rowBytes).toBeLessThan(WORST_CASE_ROW_BYTES * (1 + ROW_TOLERANCE));
 
     // And a ceiling on the call, which is what the cap is chosen to satisfy.
-    const worstCase = STATES_COUNTED * (COUNT_CAP + 1) * rowBytes;
+    const worstCase = (STATES_COUNTED * (COUNT_CAP + 1) + HEARTBEAT_DOCUMENTS) * rowBytes;
     expect(worstCase).toBeLessThan(READ_BUDGET_BYTES * BUDGET_SHARE);
   });
 });
