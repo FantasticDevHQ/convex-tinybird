@@ -68,8 +68,40 @@ export const DEFAULT_RESUME_LIMIT = 100;
 /** How many earlier failures an event keeps alongside its newest one. */
 export const MAX_ERROR_HISTORY = 5;
 
-/** `health` never reads more than this many rows per state. */
-export const COUNT_CAP = 1000;
+/**
+ * How many rows per state `health` will count before answering "at least this many".
+ *
+ * Sized from a MEASURED row, not an estimated one. `healthcost.test.ts` builds the largest
+ * event the contract permits — every string at its documented maximum, every optional field
+ * present — and it comes to about 2.4 KB. `health` counts three states and reads one row
+ * past the cap in each, so the worst call is `3 x (cap + 1) x 2.4 KB` against Convex's
+ * roughly 8 MiB per-call budget:
+ *
+ * | cap | worst call | share of budget |
+ * |---|---|---|
+ * | 1000 | 7.0 MiB | 88% |
+ * | 500 | 3.5 MiB | 44% |
+ * | 250 | 1.8 MiB | 22% |
+ *
+ * A thousand rows was 88% of the budget, and that shape is not pathological: a sustained
+ * outage produces exactly a thousand failed events each carrying a full failure history, so
+ * the worst case and the case an operator reaches for `health` in are the same case.
+ *
+ * This was unreachable before FTD-2525. The payload used to sit on the event row, so a call
+ * died on bytes at roughly 130 events and the cap never came into play. Removing the payload
+ * fixed that and made the cap the thing that binds.
+ *
+ * **Why lower the cap rather than change the mechanism.** Two alternatives were considered.
+ * Counting one state per call would make the host ask three times, moving the cost rather
+ * than removing it and changing the API for every caller. Maintained counters on the
+ * settings row would make a count one document, but every transition would then write to
+ * that single row, trading a read bound for write contention on the hot path — a worse
+ * trade for a component whose whole job is ingest. Lowering the cap costs only precision in
+ * an answer that is already deliberately imprecise: `capped: true` means "more than this",
+ * and an operator acts the same on 250 as on 1000. `oldestPendingAgeMs` from `heartbeat`
+ * tells them the severity, and it reads two documents whatever the backlog.
+ */
+export const COUNT_CAP = 250;
 
 // ---------------------------------------------------------------------------- request policy
 

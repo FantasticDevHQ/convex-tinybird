@@ -121,14 +121,25 @@ payload now lives in `payloads`, keyed by event and read only when delivering an
 comparing a duplicate, so an event row is about 2 KB whatever the event carries and the row
 cap is once again the thing that binds.
 
-That makes the cap reachable for the first time, and it is now the next thing to bind. `health`
-counts three states, so a full cap is 3003 documents; a fully decorated row — `eventId` up to
-256, `datasource` up to 128, `lastError`, and `previousErrors` holding up to `MAX_ERROR_HISTORY`
-more messages of 200 — is about 2.1 KB, which comes to roughly 6.1 MiB of the ~8 MiB budget.
-That is not a hypothetical shape: a sustained outage produces exactly a thousand failed rows
-each carrying a full history, so the worst case and the alerting case are the same case.
-Tracked as FTD-2530. `heartbeat` reads two documents and is unaffected, which is why it is what
-a monitor should poll.
+That made the cap reachable for the first time, and FTD-2530 then sized it from a measured row
+rather than an estimated one. `healthcost.test.ts` builds the largest event the contract permits —
+`eventId` at 256, `datasource` at 128, `lastError` and a full `previousErrors` of 200-character
+messages, every optional field present — and it comes to about 2.4 KB, not the 2.1 KB the estimate
+had assumed. `health` counts three states and reads one row past the cap in each, so the worst
+call is `3 x (cap + 1) x 2.4 KB`. At the old cap of 1000 that was 7.0 MiB, **88% of the ~8 MiB
+budget**; at 250 it is 1.8 MiB, 22%.
+
+That shape is not hypothetical: a sustained outage produces exactly that many failed rows each
+carrying a full history, so the worst case and the case an operator reaches for `health` in are
+the same case — which is why the margin is large rather than merely sufficient. `heartbeat` reads
+two documents whatever the backlog and is unaffected, which is why it is what a monitor should
+poll.
+
+The cap was lowered rather than the mechanism changed. Counting one state per call would make the
+host ask three times, moving the cost instead of removing it. Maintained counters would make a
+count one document, but every transition would then write to a single row, trading a read bound
+for write contention on the ingest path. Lowering the cap costs only precision in an answer that
+is already deliberately imprecise.
 
 That failure was a property of the schema rather than of the query, which is why the fix was a
 schema change and not a smaller cap.
