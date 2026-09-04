@@ -189,16 +189,30 @@ describe("requeueing work that stopped moving", () => {
     // SECOND time, and that is the contract rather than a bug — dedupe is Tinybird's job on
     // `event_id`. If this ever asserts one call, the contract has quietly become at-most-once
     // and events will be lost instead of duplicated.
+    // CONSTRUCTED, not injected, and that is a limitation worth stating rather than papering
+    // over. Verification asked for the ticket's suggested injection — make `fetch` throw after
+    // the request — and I tried it: a throw runs `markAttemptFailed`, so the row ends `failed`
+    // or `pending`, never `delivering`. That exercises the dead-letter path, not this one.
+    //
+    // The state this test needs is what a process DEATH leaves: the request went out, and no
+    // handler ran afterwards because there was no process left to run one. Nothing in-process
+    // can produce that, because everything in-process runs to completion. So the state is
+    // built directly, and the fixture is honest about being a stand-in for the state rather
+    // than a reproduction of the event.
     const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
     vi.stubGlobal("fetch", fetchSpy);
     const t = setup();
     await parked(t, "unacked", { state: "delivering", ageMs: 30 * MINUTE, settled: true });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect((await stateOf(t, "unacked"))?.state).toBe("delivering");
 
     await t.mutation(api.recovery.requeueStuck, {});
     await drain(t);
 
+    // Both halves matter. The call count is the at-least-once contract; the state is the proof
+    // that recovery actually completes, which an earlier version of this test never asserted.
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(await stateOf(t, "unacked")).toMatchObject({ state: "delivered" });
   });
 
   it("reports that more remain when the page is full of live work", async () => {
@@ -381,5 +395,61 @@ describe("requeueing work that stopped moving", () => {
       actor: "nightly cron",
       count: 1,
     });
+  });
+
+  it("does not invent a fault for a row that is merely waiting to be resumed", async () => {
+    // The pending scan walks by age regardless of pointer, so on a paused instance every
+    // waiting row qualifies. Tagging those `stuck` relabels a backlog that is behaving exactly
+    // as designed, and overwriting `lastError` pushes each row's real failure out of view — on
+    // the one surface an operator consults to find out why delivery stopped.
+    //
+    // A pending row with no pointer was never delivering. Nothing about it went wrong.
+    const fetchSpy = vi
+      .fn()
+      .mockImplementation(() => jsonResponse(503, { error: "upstream unavailable" }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    // No pointer: the shape of a row that was never scheduled, or whose delivery completed
+    // and cleared it. This is resume's case, not a stranding.
+    await parked(t, "waiting", {
+      state: "pending",
+      ageMs: 30 * MINUTE,
+      settled: true,
+      keepPointer: false,
+    });
+    const before = await t.run(async (ctx) => (await ctx.db.query("events").first())?.lastError);
+    expect(before?.category).toBeDefined();
+    await t.mutation(api.lib.pause, { actor: "alice@example.com" });
+
+    await t.mutation(api.recovery.requeueStuck, {});
+
+    const after = await stateOf(t, "waiting");
+    expect(after).toMatchObject({ state: "pending", tagged: false });
+    // Its real diagnosis is untouched, not merely preserved one step back.
+    expect((await t.run(async (ctx) => ctx.db.query("events").first()))?.lastError?.category).toBe(
+      before?.category,
+    );
+  });
+
+  it("stops at the limit and still reports that more is waiting", async () => {
+    // `limit: 1` gives the delivering scan the whole share, leaving the pending scan nothing.
+    //
+    // This does NOT test the `batch <= 0` guard, and saying so matters: removing that guard
+    // leaves every assertion here true, because `take(0 + 1)` then `slice(0, 0)` produces the
+    // same result by a longer route. The guard saves one read and decides nothing. What this
+    // does test is that a call which runs out of budget reports `remaining: true` rather than
+    // declaring itself finished.
+    const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await parked(t, "d1", { state: "delivering", ageMs: 30 * MINUTE, settled: true });
+    await parked(t, "p1", { state: "pending", ageMs: 30 * MINUTE, settled: true });
+
+    const result = await t.mutation(api.recovery.requeueStuck, { limit: 1 });
+
+    // One rescue, and the pending row untouched because there was no budget left for it — but
+    // the call must still say there is more to do rather than reporting itself finished.
+    expect(result).toMatchObject({ requeued: 1, remaining: true });
+    expect(await stateOf(t, "p1")).toMatchObject({ tagged: false });
   });
 });

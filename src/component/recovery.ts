@@ -59,6 +59,11 @@ export async function requeueAbandoned(
   batch: number,
   after: number | null,
 ): Promise<{ requeued: number; visited: number; more: boolean; cursor: number | null }> {
+  // A cost guard, not a behaviour, and deliberately NOT pinned by a test. Removing it changes
+  // nothing observable — `take(0 + 1)` followed by `slice(0, 0)` selects no rows and still
+  // reports `more: true` — so its whole effect is one avoided document read. Verification
+  // found this mutant surviving and the honest answer is that it should: a test written to
+  // kill it would have to assert something this guard does not actually decide.
   if (batch <= 0) return { requeued: 0, visited: 0, more: true, cursor: after };
   const found = await ctx.db
     .query("events")
@@ -105,6 +110,23 @@ export async function requeueAbandoned(
   let requeued = 0;
   for (const event of selected) {
     if (event.workId !== undefined && stillWorking.has(event.workId)) continue;
+
+    // A pending row with NO pointer was never delivering, so nothing about it went wrong. It
+    // is simply unscheduled — waiting for `resume`, or for an append token — and that is
+    // `resume`'s case, reached here only so such rows cannot crowd the window.
+    //
+    // Rescheduling it is right; calling it STUCK is not. An earlier revision tagged every one
+    // of them and overwrote `lastError`, so on a paused instance the whole waiting backlog was
+    // relabelled "No progress for 30 minutes" and each row's real 503 was pushed out of view —
+    // inventing a fault for rows that are behaving exactly as designed, on the one surface an
+    // operator would consult to find out why.
+    if (event.workId === undefined) {
+      // Nothing to do while paused: `scheduleDelivery` would decline, and patching would churn
+      // `updatedAt` on rows that are fine.
+      if (await scheduleDelivery(ctx, event._id)) requeued += 1;
+      continue;
+    }
+
     await ctx.db.patch(event._id, {
       state: "pending",
       // Cleared so `resume` can see the row as well. Leaving it set is what made the second
