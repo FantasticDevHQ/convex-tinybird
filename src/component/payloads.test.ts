@@ -340,7 +340,20 @@ describe("the payload lives outside the counted row", () => {
     // it consults the database, and the negative one that it reads no message.
     const deleteBody = bodyOf(state, "deleteEventWithPayload");
     expect(deleteBody).toContain("await ctx.db.get(event.payloadId)");
-    expect(deleteBody).not.toMatch(/message/u);
+
+    // The caught error is BOUND and RETHROWN, and never looked at. Two occurrences: the
+    // `catch (error)` binding and the `throw error`.
+    //
+    // An earlier version forbade the token `message` instead, which is bound to one spelling
+    // rather than to the property. Verification walked through it with
+    // `String(error).includes("nonexistent")` — 8/8 green — and `error.toString()`,
+    // `${error}` and `err["mess" + "age"]` all do the same. A destructured `message` and a
+    // helper extraction were caught, so it was the case I had explicitly flagged as the risk
+    // that got past, which is its own lesson about naming a hazard and then not testing it.
+    //
+    // Counting `error` is bound to the claim itself: the branch turns on a database fact,
+    // never on the error. Any inspection at all needs a third mention.
+    expect(deleteBody.match(/\berror\b/gu)).toHaveLength(2);
 
     const justified = ["lib.ts", "lifecycle.ts", "state.ts"];
     const unexpected = Object.keys(reads).filter(

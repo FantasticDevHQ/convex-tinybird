@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as budget from "../budget.js";
 import type * as canonical from "../canonical.js";
 import type * as classify from "../classify.js";
 import type * as contract from "../contract.js";
@@ -28,6 +29,7 @@ import type {
 import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
+  budget: typeof budget;
   canonical: typeof canonical;
   classify: typeof classify;
   contract: typeof contract;

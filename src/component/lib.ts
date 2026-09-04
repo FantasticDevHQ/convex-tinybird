@@ -14,12 +14,6 @@ import {
   scheduleDelivery,
 } from "./state";
 import {
-  DEFAULT_CLEANUP_LIMIT,
-  SWEEP_READ_BUDGET_BYTES,
-  DEFAULT_ORPHAN_SCAN_LIMIT,
-  MAX_ORPHAN_SCAN_LIMIT,
-  DEFAULT_DELIVERED_RETENTION_MS,
-  DEFAULT_FAILED_RETENTION_MS,
   DEFAULT_REPLAY_LIMIT,
   MAX_REPLAY_LIMIT,
   boundedBatch,
@@ -38,6 +32,14 @@ import {
   vHealth,
   vHeartbeat,
 } from "./contract";
+import {
+  DEFAULT_CLEANUP_LIMIT,
+  DEFAULT_DELIVERED_RETENTION_MS,
+  DEFAULT_FAILED_RETENTION_MS,
+  DEFAULT_ORPHAN_SCAN_LIMIT,
+  MAX_ORPHAN_SCAN_LIMIT,
+  SWEEP_READ_BUDGET_BYTES,
+} from "./budget";
 
 /** The cheap operator signals. See {@link readHeartbeat}. */
 export const heartbeat = query({
@@ -330,20 +332,24 @@ export const cleanup = mutation({
     // ONE byte budget too, and for the same reason. Splitting it would let a call read twice
     // what a caller bounding a transaction asked for, and the bytes are the bound that
     // actually binds once payloads are large.
-    const delivered = await sweepExpired(
-      ctx,
-      "delivered",
-      now - deliveredRetentionMs,
-      budget,
-      SWEEP_READ_BUDGET_BYTES,
-    );
-    const failed = await sweepExpired(
-      ctx,
-      "failed",
-      now - failedRetentionMs,
-      budget - delivered.deleted,
-      SWEEP_READ_BUDGET_BYTES - delivered.bytesSpent,
-    );
+    const delivered = await sweepExpired(ctx, {
+      state: "delivered",
+      cutoff: now - deliveredRetentionMs,
+      batch: budget,
+      byteBudget: SWEEP_READ_BUDGET_BYTES,
+      mayExemptFirstRow: true,
+    });
+    const failed = await sweepExpired(ctx, {
+      state: "failed",
+      cutoff: now - failedRetentionMs,
+      batch: budget - delivered.deleted,
+      byteBudget: SWEEP_READ_BUDGET_BYTES - delivered.bytesSpent,
+      // Only if the delivered sweep took nothing. Otherwise this call has already had its
+      // one over-budget row and the guarantee would be `budget + worstRow`, not `budget`.
+      // Nothing strands: once the delivered rows are gone, a later call arrives here with
+      // the exemption available again.
+      mayExemptFirstRow: delivered.deleted === 0,
+    });
 
     // Two fields, because they answer two questions and one slot cannot hold both.
     //

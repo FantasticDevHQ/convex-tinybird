@@ -8,15 +8,14 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import {
   type BoundedCount,
   COUNT_CAP,
-  EVENT_ROW_READ_BYTES,
   type EventState,
   MAX_ERROR_HISTORY,
-  PAYLOAD_ROW_OVERHEAD_BYTES,
   type vDeliveryError,
   type vHeartbeat,
   type vOperatorAction,
   type vPausedReason,
 } from "./contract";
+import { EVENT_ROW_READ_BYTES, PAYLOAD_ROW_OVERHEAD_BYTES } from "./budget";
 import { pool } from "./pool";
 import { sanitizeMessage } from "./sanitize";
 
@@ -333,11 +332,23 @@ export async function deleteEventWithPayload(
  */
 export async function sweepExpired(
   ctx: MutationCtx,
-  state: "delivered" | "failed",
-  cutoff: number,
-  batch: number,
-  byteBudget: number,
+  args: {
+    state: "delivered" | "failed";
+    /** Rows are swept when `updatedAt` is strictly below this. */
+    cutoff: number;
+    /** The row cap. The weaker of the two bounds; see `DEFAULT_CLEANUP_LIMIT`. */
+    batch: number;
+    /** The real bound, spent against each row's recorded `payloadBytes`. */
+    byteBudget: number;
+    /**
+     * Whether this sweep may take its first row over budget. True for at most ONE sweep per
+     * call: `cleanup` runs two, and letting each have a free row makes the guarantee
+     * `budget + worstRow` rather than `budget`.
+     */
+    mayExemptFirstRow: boolean;
+  },
 ): Promise<{ deleted: number; more: boolean; bytesSpent: number }> {
+  const { state, cutoff, batch, byteBudget, mayExemptFirstRow } = args;
   // `updatedAt`, not `createdAt`: retention runs from when the event FINISHED. Both
   // `markDelivered` and `markFailed` set it as they move the row into its terminal state,
   // so for a swept row it is the moment it stopped being work.
@@ -371,11 +382,18 @@ export async function sweepExpired(
     const payloadReads = event.payloadId === undefined ? 2 : 1;
     const cost =
       EVENT_ROW_READ_BYTES + payloadReads * (event.payloadBytes + PAYLOAD_ROW_OVERHEAD_BYTES);
-    // `deleted > 0` and not `>=`: the first row goes regardless of what it costs. One row
-    // cannot come near the limit — the worst case is about 523 KiB against 2.9 MiB — and a
-    // sweep that declines to make progress is the wedge this component keeps rediscovering.
-    // Refusing the largest row would strand it, and it sorts first in every later batch.
-    if (deleted > 0 && bytesSpent + cost > byteBudget) {
+    // The first row goes regardless of what it costs: one row cannot come near the limit,
+    // and a sweep that declines to make progress is the wedge this component keeps
+    // rediscovering — refusing the largest row would strand it, and it sorts first in every
+    // later batch.
+    //
+    // `mayExemptFirstRow` makes that exemption once per CALL rather than once per sweep. It
+    // was per sweep, so `cleanup` — which sweeps delivered and then failed — could exempt a
+    // row in each and overshoot by a full worst row: measured at 104% of the budget, 118% in
+    // the worst case. Safe against the real limit, but not the bound the comment claimed,
+    // and an unbounded overshoot is exactly what a byte budget exists to prevent.
+    const exempt = mayExemptFirstRow && deleted === 0;
+    if (!exempt && bytesSpent + cost > byteBudget) {
       return { deleted, more: true, bytesSpent };
     }
     await deleteEventWithPayload(ctx, event);
