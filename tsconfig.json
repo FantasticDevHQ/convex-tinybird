@@ -4,5 +4,5 @@
     "noEmit": true,
     "types": ["node", "vitest/globals", "vite/client"]
   },
-  "include": ["src"]
+  "include": ["src", "vitest.setup.ts"]
 }

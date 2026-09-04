@@ -6,6 +6,33 @@ the component delivers it at least once, deduped by the event's identity. Projec
 construction: it depends on `convex` only (and `@convex-dev/workpool` once delivery lands), never
 on the host's schema or auth.
 
+## Checking it locally
+
+One command runs the whole portability battery — typecheck, tests, the boundary scan, the
+secrets scan, codegen freshness, every gate self-test, and the example app's own typecheck and
+tests:
+
+```bash
+pnpm --filter @fantastic-dev/convex-tinybird run check
+```
+
+CI runs the same gates through `pnpm run check:scripts`, and needs no Tinybird credentials to do
+it: the suites refuse network access outright (`vitest.setup.ts` installs a `fetch` that rejects
+until a test stubs it), so there is nothing to authenticate against.
+
+Three things it will fail on, each verified by deliberately breaking it:
+
+| Break                                                 | What fails                                          |
+| ----------------------------------------------------- | --------------------------------------------------- |
+| A module or public function missing from `_generated` | `check-codegen-fresh.mjs`                           |
+| An import outside `convex` and this component         | `check-boundary.mjs`, in `src` and `example/convex` |
+| A test that calls `fetch` without stubbing it         | the suite, on `network disabled in tests`           |
+
+Codegen freshness compares the module and public-function SET rather than regenerating, because
+a component's `_generated` is written by pushing a host that mounts it and CI has no deployment.
+Signature drift is caught by `tsc` instead — the client consumes the generated component types,
+so a changed validator is a type error there.
+
 ## Status
 
 This package is being built in layers, and this README describes only what is actually present.

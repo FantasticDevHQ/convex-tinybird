@@ -18,7 +18,8 @@
     "check:secrets": "node scripts/check-no-secrets.mjs",
     "codegen": "convex codegen --component-dir src/component",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm run typecheck && pnpm run test && pnpm run check:boundary && pnpm run check:secrets && node scripts/check-codegen-fresh.mjs && node --test scripts/check-boundary.test.mjs scripts/check-no-secrets.test.mjs scripts/check-codegen-fresh.test.mjs && pnpm --filter @fantastic-dev/convex-tinybird-example run typecheck && pnpm --filter @fantastic-dev/convex-tinybird-example run test"
   },
   "peerDependencies": {
     "convex": "^1.44.0"
