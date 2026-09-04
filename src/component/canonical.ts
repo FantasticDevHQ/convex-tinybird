@@ -62,6 +62,11 @@ function encode(value: unknown, path: string, depth: number): string {
  * uuids, ISO-8601 timestamps, enum codes, booleans, zero-padded ids, numerics of the same
  * digit count. A same-length edit to any of those defeats a length check completely.
  *
+ * Hashes UTF-16 code units, not UTF-8 bytes, which differs from `utf8Length` beside it. That
+ * is self-consistent and therefore harmless — the same input always produces the same
+ * fingerprint — but the two are measuring different domains, so they are never compared to
+ * one another, only each against its own stored counterpart.
+ *
  * Synchronous and dependency-free on purpose. `crypto.subtle` is async and its availability
  * inside a mutation is not something to rely on, and this runs on the enqueue path.
  */

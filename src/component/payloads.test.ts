@@ -396,6 +396,104 @@ describe("the payload lives outside the counted row", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("keeps the attempt that failed before the payload went missing", async () => {
+    // `markFailed` overwrites `lastError` without moving the old one into the history, so a
+    // real failure is simply lost. Pre-existing, but this ticket is what makes it reachable:
+    // `payload_missing` is written through `markFailed` over whatever the last attempt
+    // recorded, so an event that failed a transient attempt and THEN lost its payload row
+    // ends up saying only that the payload is gone — hiding the reason it was retrying.
+    //
+    // The state is built directly rather than driven through the pool: reaching it that way
+    // needs an attempt to fail and the payload to vanish between that attempt and the next,
+    // which fake timers make fragile to express and which is not what is under test here.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, accepted)));
+    const t = setup();
+    await enqueueOne(t);
+    const id = await t.run(async (ctx) => (await ctx.db.query("events").first())!._id);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(id, {
+        state: "pending" as const,
+        attempts: 1,
+        workId: undefined,
+        lastError: { category: "server_error" as const, message: "503", at: Date.now() },
+      });
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+    });
+
+    expect(await t.action(internal.deliver.deliverEvent, { eventId: id })).toEqual({
+      outcome: "failed",
+    });
+
+    const dead = await statusOf(t);
+    expect(dead?.lastError?.category).toBe("payload_missing");
+    // The server error that came first is still readable rather than overwritten.
+    expect(dead?.previousErrors?.map((error) => error.category)).toContain("server_error");
+  });
+
+  it("is idempotent: repairing twice does not resend or re-repair", async () => {
+    // A host retrying its own repair is the ordinary case, not an exotic one: the call that
+    // repairs is just an `enqueue`, and hosts retry those. The second call must find the
+    // payload row it wrote and behave like any other duplicate.
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, accepted));
+    vi.stubGlobal("fetch", fetchSpy);
+    const t = setup();
+    await enqueueOne(t);
+    await t.run(async (ctx) => {
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+    });
+    await drain(t);
+
+    expect(await enqueueOne(t)).toMatchObject({ outcome: "repaired" });
+    await drain(t);
+    expect(await statusOf(t)).toMatchObject({ state: "delivered" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // Second repair: a duplicate, no second payload row, and nothing sent again.
+    expect(await enqueueOne(t)).toMatchObject({ outcome: "duplicate", state: "delivered" });
+    await drain(t);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const payloadRows = await t.run(async (ctx) => {
+      // eslint-disable-next-line @convex-dev/no-collect-in-query
+      return (await ctx.db.query("payloads").collect()).length;
+    });
+    expect(payloadRows).toBe(1);
+  });
+
+  it("catches a repair whose fingerprint collides but whose length does not", async () => {
+    // Why the check is length AND fingerprint rather than either alone. The fingerprint is
+    // 32-bit FNV-1a, so collisions exist and are findable: these two canonical payloads both
+    // hash to 61dcfbeb. They differ in length, which is the half only `payloadBytes` can see.
+    //
+    // Found by brute force over `{"a":"<v>"}` — the point is not that a host would hit it by
+    // accident, but that with the byte check removed the suite could not tell. Every other
+    // repair fixture differs in both length and hash, so nothing else discriminates them.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, accepted)));
+    const t = setup();
+    await t.mutation(api.lib.enqueue, {
+      datasource: "events",
+      eventId: "evt_1",
+      payload: { a: "8pwf" },
+    });
+    await t.run(async (ctx) => {
+      const stored = await ctx.db.query("payloads").first();
+      await ctx.db.delete(stored!._id);
+    });
+    await drain(t);
+
+    expect(
+      await codeOf(
+        t.mutation(api.lib.enqueue, {
+          datasource: "events",
+          eventId: "evt_1",
+          payload: { a: "0j0e0" },
+        }),
+      ),
+    ).toBe("identity_conflict");
+    expect(await t.run((ctx) => ctx.db.query("payloads").first())).toBeNull();
+  });
+
   it("checks the content of a DELIVERED event before calling it a duplicate", async () => {
     // The repair branch must not be more permissive than the path beside it. Returning
     // `duplicate` before comparing content meant a delivered event whose payload row had

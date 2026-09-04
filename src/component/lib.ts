@@ -314,7 +314,17 @@ export const markFailed = internalMutation({
   handler: async (ctx, { eventId, error }) => {
     const event = await ctx.db.get(eventId);
     if (event === null || event.state === "delivered" || event.state === "failed") return null;
-    await ctx.db.patch(eventId, { state: "failed", lastError: error, updatedAt: Date.now() });
+    await ctx.db.patch(eventId, {
+      state: "failed",
+      lastError: error,
+      // The error being replaced is a real attempt's reason and must not simply vanish.
+      // `onDeliveryComplete` has always moved it into the history; this path did not, so an
+      // event that failed an attempt and then hit a terminal fault ended up reporting only
+      // the fault. `payload_missing` is written through here, which is what made the loss
+      // reachable rather than theoretical.
+      previousErrors: pushHistory(event.previousErrors, event.lastError),
+      updatedAt: Date.now(),
+    });
     await patchSettings(ctx, { lastError: error });
     return null;
   },

@@ -74,7 +74,11 @@ The remedy is to enqueue the event again. `enqueue` is the only surface that wri
 and a component's tables are unreachable from the host, so a re-enqueue rejected as a conflict
 would leave the row stuck permanently: selected by replay, never deliverable, never countable
 down. Re-enqueueing the same identity when the payload row is absent therefore **restores** it and
-puts the event back to work, returning `repaired`. The payload cannot be compared, because it is gone; `payloadBytes` and a
+returns `repaired`. Whether it also puts the event back to work depends on what the event was
+doing: a dead letter is requeued, and so is a `pending` row that nothing had scheduled, but an
+event already `delivering` is left alone — it is mid-attempt, and restoring its payload is enough
+for that attempt to finish. Requeueing it would give it a second worker, which is the failure the
+guard on that branch exists to prevent. The payload cannot be compared, because it is gone; `payloadBytes` and a
 fingerprint of the canonical text survive on the event row and are checked instead, so a repair
 with different content is a conflict. The fingerprint is FNV-1a and not cryptographic: it detects
 an accidental substitution, such as a host bug that flips a status or swaps an id, and does not
