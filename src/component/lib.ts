@@ -409,11 +409,13 @@ export const cleanup = mutation({
  * should pass a larger limit; the ceiling is {@link MAX_ORPHAN_SCAN_LIMIT}.
  */
 export const reclaimOrphanedPayloads = mutation({
-  args: { limit: v.optional(v.number()), cursor: v.optional(v.union(v.string(), v.null())) },
+  args: { limit: v.optional(v.number()), cursor: v.optional(v.union(v.number(), v.null())) },
   returns: v.object({
     reclaimed: v.number(),
     scanned: v.number(),
-    cursor: v.union(v.string(), v.null()),
+    // A `_creationTime`, not an opaque pagination token: `.paginate()` is forbidden inside
+    // a component, so the scan carries its own cursor. Callers pass it back unchanged.
+    cursor: v.union(v.number(), v.null()),
     isDone: v.boolean(),
   }),
   handler: async (ctx, { limit, cursor }) => {

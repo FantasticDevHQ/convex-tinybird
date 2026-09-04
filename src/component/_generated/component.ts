@@ -204,9 +204,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       reclaimOrphanedPayloads: FunctionReference<
         "mutation",
         "internal",
-        { cursor?: string | null; limit?: number },
+        { cursor?: number | null; limit?: number },
         {
-          cursor: string | null;
+          cursor: number | null;
           isDone: boolean;
           reclaimed: number;
           scanned: number;

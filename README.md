@@ -204,7 +204,7 @@ Nothing here produces one — but finding them means reading payloads, and a pay
 thing whose size you control, so folding that scan into the frequent sweep would make retention's
 cost depend on your event size again.
 
-It is paginated: carry `cursor` forward until `isDone`. Without that it would rescan the same
+Carry `cursor` forward until `isDone`. It is a number rather than an opaque token, because `.paginate()` is only supported in the app and never inside a component; treat it as opaque anyway and pass back exactly what you were given. Without that it would rescan the same
 first page forever, because healthy rows are never deleted and so occupy it permanently. The
 default `limit` is 2, sized for the largest payload the component allows; if your events are
 small, pass a larger one — roughly 22 at the default 64 KiB bound and roughly 440 at 1 KiB,

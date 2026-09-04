@@ -11,6 +11,36 @@ or roll back together. Delivery to the Tinybird Events API happens afterwards, a
 through a nested Workpool, at least once. Tinybird is expected to dedupe by `event_id`
 (a `ReplacingMergeTree` keyed on it); the component never claims exactly-once delivery.
 
+## What the test suite cannot tell you
+
+`convex-test` runs the component's code as plain JavaScript. It does not know the code is a
+component, so it cannot enforce anything the backend restricts to non-root components — and it
+has now certified two things the real backend refuses.
+
+`.paginate()` is the sharp one. It is only supported in the app; inside a component the backend
+bails with `PaginationUnsupportedInComponents`
+(`crates/isolate/src/environment/udf/async_syscall.rs:1773`). A revision of
+`reclaimOrphanedPayloads` used it and was dead on every call in production while 228 tests
+passed, because the harness implements `paginate` in plain JavaScript with no component check.
+The orphan scan pages with a manual cursor over `_creationTime` instead; `by_creation_time` is
+built in on every table, so this costs no schema change.
+
+The same shape caught the stale-payload guard, which matched an error message the harness
+produces and the backend does not.
+
+The rule that follows: **for anything touching a Convex API surface, a green suite is not
+evidence that the code runs.** Push the component to a real deployment and call the function.
+From a provisioned worktree that is about a minute:
+
+```bash
+cd packages/backend && CONVEX_AGENT_MODE=anonymous npx convex dev --once
+CONVEX_AGENT_MODE=anonymous npx convex run <probe>
+```
+
+And make the probe discriminating before trusting it — an empty table returns a clean result
+from almost any implementation. The control that settled this one was restoring `.paginate()`
+and watching the same call throw.
+
 ## State machine
 
 ```

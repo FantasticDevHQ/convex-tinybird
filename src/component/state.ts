@@ -415,26 +415,48 @@ export async function sweepExpired(
 export async function sweepOrphanedPayloads(
   ctx: MutationCtx,
   batch: number,
-  cursor: string | null,
-): Promise<{ reclaimed: number; scanned: number; cursor: string | null; isDone: boolean }> {
-  // Paginated, because a plain `take(n)` cannot work here. Healthy rows are never deleted,
-  // so they occupy the front of the table permanently and an unordered `take` rescans the
-  // same page on every call — an orphan behind that page is invisible for good. Not slow
-  // progress: no progress. The caller carries the cursor forward.
-  const page = await ctx.db.query("payloads").paginate({ cursor, numItems: batch });
+  after: number | null,
+): Promise<{ reclaimed: number; scanned: number; cursor: number | null; isDone: boolean }> {
+  // A MANUAL cursor over `_creationTime`, and not `.paginate()`, because paginate is
+  // forbidden inside a Convex component. The backend bails with
+  // `PaginationUnsupportedInComponents` — `crates/isolate/src/environment/udf/
+  // async_syscall.rs:1773` — for any non-root component, which this package is by
+  // construction. An earlier revision used `.paginate()` here and was 100% dead on every
+  // call in production while all 228 tests passed, because convex-test implements paginate
+  // in plain JavaScript with no component check. The harness cannot see component-scoped
+  // restrictions AT ALL; only a real push can.
+  //
+  // A plain `.take(batch)` cannot substitute. Healthy rows are never deleted, so they hold
+  // the front of the table permanently and an unordered take rescans the same page forever —
+  // an orphan behind it is invisible for good. Not slow progress: no progress.
+  //
+  // `by_creation_time` is built in on every table (`system_fields.d.ts:40`), so this costs no
+  // schema change. `gt` rather than `gte` is safe because `_creationTime` is unique within a
+  // table: the backend advances `next_creation_time` past every document it observes and
+  // increments by `next_up()` on the float, so no two rows share one.
+  const rows = await ctx.db
+    .query("payloads")
+    .withIndex("by_creation_time", (q) => (after === null ? q : q.gt("_creationTime", after)))
+    .take(batch);
+
   let reclaimed = 0;
-  for (const stored of page.page) {
+  for (const stored of rows) {
     if ((await ctx.db.get(stored.eventId)) === null) {
       await ctx.db.delete(stored._id);
       reclaimed += 1;
     }
   }
+
+  // A short page means the end of the table. Deliberately NOT `take(batch + 1)`: the extra
+  // row would be a whole payload document read, and payloads are the expensive thing here.
+  // The cost of this is one extra empty call when the table size is an exact multiple.
+  const isDone = rows.length < batch;
   return {
     reclaimed,
     // `scanned` alone cannot answer "are there orphans anywhere" — that is what `isDone`
     // is for. It is reported so a caller can tell a clean page from an empty one.
-    scanned: page.page.length,
-    cursor: page.isDone ? null : page.continueCursor,
-    isDone: page.isDone,
+    scanned: rows.length,
+    cursor: isDone ? null : (rows.at(-1)?._creationTime ?? null),
+    isDone,
   };
 }

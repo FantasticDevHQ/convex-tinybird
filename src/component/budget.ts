@@ -176,7 +176,10 @@ export const DEFAULT_ORPHAN_SCAN_LIMIT = 2;
  * The largest `limit` `reclaimOrphanedPayloads` will honour.
  *
  * Sized for the DEFAULT payload bound rather than the hard cap: 20 orphans at 64 KiB is
- * about 2.6 MiB, inside the share. A host that raises `maxPayloadBytes` must lower its
+ * about 2.6 MiB, inside the share. Twenty is NOT maximal — 22 also fits — and its assertion
+ * is deliberately one-sided, unlike the default's. A ceiling wants slack: pinning it to the
+ * largest value that fits would make every future change to the row cost a failing test on a
+ * number chosen for round-ness. A host that raises `maxPayloadBytes` must lower its
  * limit to match, which is stated here because nothing can enforce it — the scan cannot see
  * that option, and by the time it has read a row it has already paid for it.
  *

@@ -226,11 +226,16 @@ describe("retention cleanup", () => {
       await ctx.db.delete(event!._id);
     });
 
-    // Scan in windows far smaller than the table, carrying the cursor as a host would.
-    let cursor: string | null = null;
+    // Scan in windows far smaller than the table, carrying the cursor as a host would. The
+    // cursor is a `_creationTime` rather than an opaque token because `.paginate()` is
+    // forbidden inside a component — see `sweepOrphanedPayloads`. This test CANNOT see that
+    // restriction: convex-test implements paginate in plain JavaScript with no component
+    // check, so the previous implementation passed here while throwing on every real call.
+    // The proof that this one runs is a push to a real deployment, recorded in the PR.
+    let cursor: number | null = null;
     let reclaimed = 0;
     for (let pass = 0; pass < 20; pass += 1) {
-      const result: { reclaimed: number; cursor: string | null; isDone: boolean } =
+      const result: { reclaimed: number; cursor: number | null; isDone: boolean } =
         await t.mutation(api.lib.reclaimOrphanedPayloads, { limit: 3, cursor });
       reclaimed += result.reclaimed;
       cursor = result.cursor;

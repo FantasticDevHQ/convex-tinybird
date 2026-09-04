@@ -41,6 +41,22 @@ export const ALLOWED_RUNTIME_DEPENDENCIES = new Set(["convex", "@convex-dev/work
  */
 export const FORBIDDEN_SOURCE_PATTERNS = [
   {
+    // `.paginate()` is only supported in the app, never inside a component: the backend
+    // bails with `PaginationUnsupportedInComponents`
+    // (crates/isolate/src/environment/udf/async_syscall.rs:1773). This package is a
+    // component by construction, so a paginate here is dead code on every call in
+    // production.
+    //
+    // It is checked HERE because nothing else can. convex-test implements paginate in plain
+    // JavaScript with no component check, so it certified this call while the real backend
+    // refused it — 228 tests green against a surface that was 100% dead. The harness cannot
+    // see component-scoped restrictions at all. Page with a manual cursor over
+    // `_creationTime` instead; `by_creation_time` is built in on every table.
+    pattern: /\.paginate\s*\(/u,
+    why: "paginate() is only supported in the app; page with a _creationTime cursor instead",
+  },
+
+  {
     pattern: /\bgetUserIdentity\b/u,
     why: "reads the caller's identity; authorization is the host's job",
   },

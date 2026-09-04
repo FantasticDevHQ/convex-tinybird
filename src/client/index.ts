@@ -197,20 +197,26 @@ export class TinybirdDelivery {
    * in one mutation. This exists so that if something ever did, the leak would be found
    * rather than accumulate in a table nothing counts.
    *
-   * Paginated: carry `cursor` forward until `isDone`. Without that the scan would rescan the
-   * same first page every call, because healthy rows are never deleted and so occupy it
-   * permanently — an orphan behind them would be invisible for good rather than found late.
+   * Carry `cursor` forward until `isDone`. Without that the scan would rescan the same first
+   * page every call, because healthy rows are never deleted and so occupy it permanently —
+   * an orphan behind them would be invisible for good rather than found late.
    *
-   * The default `limit` of 5 is sized for the largest payload a host may configure. If yours
-   * are small, pass a much larger one; the docblock on the constant has the arithmetic.
+   * The cursor is a `_creationTime`, not an opaque pagination token, and that is forced
+   * rather than chosen: `.paginate()` is only supported in the app, never inside a component
+   * (`PaginationUnsupportedInComponents`). Treat it as opaque anyway — pass back exactly
+   * what you were given.
+   *
+   * The default `limit` of 2 is sized for the largest payload a host may configure, and
+   * reclaiming an orphan pays for its payload twice. If yours are small, pass a larger one;
+   * the docblock on the constant has the arithmetic.
    */
   async reclaimOrphanedPayloads(
     ctx: RunMutationCtx,
-    args: { limit?: number; cursor?: string | null } = {},
+    args: { limit?: number; cursor?: number | null } = {},
   ): Promise<{
     reclaimed: number;
     scanned: number;
-    cursor: string | null;
+    cursor: number | null;
     isDone: boolean;
   }> {
     return ctx.runMutation(this.component.lib.reclaimOrphanedPayloads, args);
