@@ -362,7 +362,15 @@ export async function sweepExpired(
   let bytesSpent = 0;
   let deleted = 0;
   for (const event of found.slice(0, batch)) {
-    const cost = EVENT_ROW_READ_BYTES + event.payloadBytes + PAYLOAD_ROW_OVERHEAD_BYTES;
+    // The payload is read ONCE when the pointer is set and TWICE when it is not: the
+    // fallback finds the row through `by_event` — which returns the document — and then
+    // deletes it, and a delete re-reads what it deletes. The distinction matters more than
+    // it looks: every row written before this component gained `payloadId` takes the
+    // fallback, so the FIRST sweep after deploying it pays double on every row. Charging
+    // one there would put the sweep over budget on precisely the run nobody has rehearsed.
+    const payloadReads = event.payloadId === undefined ? 2 : 1;
+    const cost =
+      EVENT_ROW_READ_BYTES + payloadReads * (event.payloadBytes + PAYLOAD_ROW_OVERHEAD_BYTES);
     // `deleted > 0` and not `>=`: the first row goes regardless of what it costs. One row
     // cannot come near the limit — the worst case is about 523 KiB against 2.9 MiB — and a
     // sweep that declines to make progress is the wedge this component keeps rediscovering.

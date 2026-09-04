@@ -285,9 +285,12 @@ The row limit still applies, and binds first when payloads are small. The first 
 is always deleted whatever it costs, because a sweep that declines to make progress never runs
 again; a single row cannot approach the limit.
 
-The index lookup survives only as a fallback for a row whose pointer was never recorded. Note
-that every row written before this component gained `payloadId` takes that path, so the first
-sweep after deploying it pays the fallback on every row, not on a rare one.
+The index lookup survives only as a fallback for a row whose pointer was never recorded, and it
+costs **two** payload reads rather than one: `by_event` returns the document, and the delete then
+re-reads it. Every row written before this component gained `payloadId` takes that path, so the
+first sweep after deploying it pays double on every row — the run with the largest bill is the
+one nobody has rehearsed. The byte budget charges accordingly, per row, from the pointer's
+presence rather than from an assumption about which era the data comes from.
 
 **The dedupe window equals the delivered retention.** The delivered row IS the dedupe record, so
 removing it makes the same identity a new event. That is a deliberate trade rather than an

@@ -476,4 +476,44 @@ describe("retention cleanup", () => {
     expect(scan.reclaimed).toBe(0);
     expect(scan.isDone).toBe(false);
   });
+
+  it("charges the fallback path twice, because it reads the payload twice", async () => {
+    // A row with no `payloadId` finds its payload through `by_event` — which returns the
+    // document — and then deletes it, and a delete re-reads what it deletes. Every row
+    // written before this component gained the pointer takes that path, so the FIRST sweep
+    // after deploying it is the one that pays double on every row: the run with the largest
+    // bill is the one nobody has rehearsed.
+    //
+    // Same eight rows as the pointered case, so the only variable is the pointer.
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+    const big = "x".repeat(HARD_MAX_PAYLOAD_BYTES);
+    for (let i = 0; i < 8; i += 1) {
+      await t.run(async (ctx) => {
+        const id = await seedEvent(ctx, {
+          datasource: "events",
+          eventId: `legacy-${i}`,
+          state: "delivered",
+          attempts: 1,
+          createdAt: Date.now() - 10 * DAY,
+          updatedAt: Date.now() - 10 * DAY,
+          payload: big,
+        });
+        // Exactly the shape of a row predating the field.
+        await ctx.db.patch(id, { payloadId: undefined });
+      });
+    }
+
+    const result = await t.mutation(api.lib.cleanup, {});
+
+    const payloadRow = HARD_MAX_PAYLOAD_BYTES + PAYLOAD_ROW_OVERHEAD_BYTES;
+    const fits = Math.floor(SWEEP_READ_BUDGET_BYTES / (EVENT_ROW_READ_BYTES + 2 * payloadRow));
+    expect(result.deletedDelivered).toBe(fits);
+    // And strictly fewer than the pointered path manages on identical rows, which is the
+    // whole claim. Without this the test would pass against a budget that ignored the
+    // pointer entirely.
+    const pointered = Math.floor(SWEEP_READ_BUDGET_BYTES / (EVENT_ROW_READ_BYTES + payloadRow));
+    expect(fits).toBeLessThan(pointered);
+    expect(result.remaining).toBe(true);
+  });
 });
