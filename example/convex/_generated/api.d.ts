@@ -9,6 +9,7 @@
  */
 
 import type * as maintenance from "../maintenance.js";
+import type * as operations from "../operations.js";
 import type * as orders from "../orders.js";
 
 import type {
@@ -19,6 +20,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   maintenance: typeof maintenance;
+  operations: typeof operations;
   orders: typeof orders;
 }>;
 
