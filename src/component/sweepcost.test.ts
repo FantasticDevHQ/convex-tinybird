@@ -19,6 +19,9 @@ installComponentTestHooks();
 
 const DAY = 24 * 60 * 60 * 1000;
 
+/** Small on purpose: the discriminating axis here is `found - deleted`, never payload size. */
+const PAYLOAD_SIZE = 4096;
+
 /** Seeds one event in a given state at a given age, with its payload row. */
 async function aged(
   t: TestInstance,
@@ -57,6 +60,33 @@ async function tableCounts(t: TestInstance) {
  * the case in mind and wrong for the case the reader is in. It earns its own file and its own
  * fixtures rather than sitting as an appendix to the retention semantics.
  */
+
+/**
+ * Eight expired `delivered` rows with small payloads.
+ *
+ * Small on purpose. The axis that separates a correct scan charge from one levied per deleted
+ * row is `found.length - deleted`, which costs nothing to vary; payload size is the axis that
+ * would need ~24 MB to move `floor(budget / perRow)` and is the wrong one to reach for.
+ */
+async function seedEightSmall(): Promise<TestInstance> {
+  const t = setup("");
+  const payload = "x".repeat(PAYLOAD_SIZE);
+  for (let i = 0; i < 8; i += 1) {
+    await t.run(async (ctx) => {
+      await seedEvent(ctx, {
+        datasource: "events",
+        eventId: `scan-${i}`,
+        state: "delivered",
+        attempts: 1,
+        createdAt: Date.now() - 10 * DAY,
+        updatedAt: Date.now() - 10 * DAY,
+        payload,
+      });
+    });
+  }
+  return t;
+}
+
 describe("what a sweep is allowed to read", () => {
   it("stops on BYTES before the row limit when payloads are large", async () => {
     // The bound the row cap cannot provide. Deleting a document READS it — Convex's
@@ -220,21 +250,7 @@ describe("what a sweep is allowed to read", () => {
     // at the payload cap, about 24 MB of fixture. So the quantity is asserted directly
     // instead, on the function that computes it.
     vi.stubGlobal("fetch", vi.fn());
-    const t = setup("");
-    const payload = "x".repeat(4096);
-    for (let i = 0; i < 8; i += 1) {
-      await t.run(async (ctx) => {
-        await seedEvent(ctx, {
-          datasource: "events",
-          eventId: `scan-${i}`,
-          state: "delivered",
-          attempts: 1,
-          createdAt: Date.now() - 10 * DAY,
-          updatedAt: Date.now() - 10 * DAY,
-          payload,
-        });
-      });
-    }
+    const t = await seedEightSmall();
 
     // A budget large enough that nothing is refused, so `bytesSpent` is the whole cost of
     // sweeping all eight rather than a number shaped by where the budget cut it off.
@@ -254,8 +270,37 @@ describe("what a sweep is allowed to read", () => {
       8 * EVENT_ROW_BYTES + 8 * (EVENT_ROW_BYTES + 4096 + PAYLOAD_ROW_OVERHEAD_BYTES);
     expect(result.bytesSpent).toBe(expected);
 
-    // And the scan half is not negligible relative to the total, so this cannot pass by the
-    // seed being rounding error — it is 33% of the charge here.
-    expect((8 * EVENT_ROW_BYTES) / expected).toBeGreaterThan(0.2);
+    // The assertion above is an exact-total pin and NOT a test of where the charge came from.
+    // With everything found also deleted, `found x 1 + deleted x 1` and `deleted x 2` are the
+    // same sixteen event reads — 121 648 either way — so the original defect passes it. The
+    // `> 0.2` guard I first wrote here did not help either: it checked the seed was a
+    // non-trivial fraction of the total, not that it was derived from `found`.
+    //
+    // The discriminating variable is `found.length - deleted`, and it is free. It does NOT
+    // need payloads large enough to move `floor(budget / perRow)`, which is what I reached
+    // for and would have cost ~24 MB of fixture. Cutting the budget short on the SAME eight
+    // 4 KB rows separates the two formulas for 32 KB.
+    const scan = 8 * EVENT_ROW_BYTES;
+    const perRow = EVENT_ROW_BYTES + PAYLOAD_SIZE + PAYLOAD_ROW_OVERHEAD_BYTES;
+
+    // A FRESH table: the sweep above deleted all eight, and running the second leg against
+    // an empty one would assert `deleted: 0` and prove nothing at all.
+    const t2 = await seedEightSmall();
+    const cut = await t2.run(async (ctx) =>
+      sweepExpired(ctx, {
+        state: "delivered",
+        cutoff: Date.now(),
+        batch: 50,
+        // Exactly three rows' worth beyond the scan: a fourth would cross it.
+        byteBudget: scan + 3 * perRow,
+        mayExemptFirstRow: true,
+      }),
+    );
+
+    // Eight rows found, three deleted. Charging the scan per DELETED row instead lets five
+    // through on this budget and reports 60 824 — so both numbers move under the defect, and
+    // neither is a coincidence of the fixture.
+    expect(cut.deleted).toBe(3);
+    expect(cut.bytesSpent).toBe(scan + 3 * perRow);
   });
 });
