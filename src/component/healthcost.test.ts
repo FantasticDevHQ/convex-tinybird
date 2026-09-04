@@ -12,7 +12,7 @@ import {
 import {
   DEFAULT_CLEANUP_LIMIT,
   DEFAULT_ORPHAN_SCAN_LIMIT,
-  EVENT_ROW_READ_BYTES,
+  EVENT_ROW_BYTES,
   MAX_ORPHAN_SCAN_LIMIT,
   PAYLOAD_ROW_OVERHEAD_BYTES,
   SWEEP_READ_BUDGET_BYTES,
@@ -291,8 +291,10 @@ describe("what a retention sweep costs", () => {
     // the overrun. What this can do is refuse to let the CONSTANTS drift from the rows.
     const rows = await measureWorstCaseRow();
 
-    // Counted twice: once from `by_state_updatedAt`, once by the delete that fetches it.
-    expect(EVENT_ROW_READ_BYTES).toBeGreaterThanOrEqual(2 * rows.event);
+    // ONE row's worth. The sweep reads an event twice — the index scan and the delete — but
+    // charges them separately, because they cover different populations: the scan pays for
+    // every row FOUND, the delete only for rows DELETED.
+    expect(EVENT_ROW_BYTES).toBeGreaterThanOrEqual(rows.event);
 
     // The payload row costs its text plus this. Measured against the real row rather than
     // assumed, so adding a field to `payloads` lands here.
@@ -300,7 +302,16 @@ describe("what a retention sweep costs", () => {
       rows.payload - HARD_MAX_PAYLOAD_BYTES,
     );
 
-    const worstRow = EVENT_ROW_READ_BYTES + HARD_MAX_PAYLOAD_BYTES + PAYLOAD_ROW_OVERHEAD_BYTES;
+    // A single row end to end: its scan read plus its delete's read, plus the payload.
+    const worstRow = 2 * EVENT_ROW_BYTES + HARD_MAX_PAYLOAD_BYTES + PAYLOAD_ROW_OVERHEAD_BYTES;
+
+    // The index scan is charged, and the ROW CAP is what bounds it. This leg exists because
+    // the scan used to be free: `take(batch + 1)` runs before any budget check, so rows found
+    // and not deleted cost bytes and were charged nothing — invisible while the row cap bound,
+    // and 140% of the charged total exactly when the byte budget bound. Nothing else in this
+    // file would notice the row cap growing past what the scan alone can afford; at a cap of
+    // 1000 the scan is 186% of the budget on its own.
+    expect((DEFAULT_CLEANUP_LIMIT + 1) * EVENT_ROW_BYTES).toBeLessThan(SWEEP_READ_BUDGET_BYTES);
 
     // One row always fits, which is why `sweepExpired` deletes the first row whatever it
     // costs. That branch is UNREACHABLE today and this is the assertion that says so — if it
@@ -315,7 +326,7 @@ describe("what a retention sweep costs", () => {
     // And at a small payload the ROW cap binds, so a full 200-row batch of ordinary events
     // stays inside the budget. This is the leg that fails if the event row grows: it is the
     // reason the old `200 x 5.4 KB` claim needed to be checked against something.
-    const smallRow = EVENT_ROW_READ_BYTES + 1024 + PAYLOAD_ROW_OVERHEAD_BYTES;
+    const smallRow = 2 * EVENT_ROW_BYTES + 1024 + PAYLOAD_ROW_OVERHEAD_BYTES;
     expect(DEFAULT_CLEANUP_LIMIT * smallRow).toBeLessThan(SWEEP_READ_BUDGET_BYTES);
   });
 });

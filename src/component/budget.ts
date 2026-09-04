@@ -37,22 +37,26 @@ export const DEFAULT_FAILED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const SWEEP_READ_BUDGET_BYTES = Math.floor(8 * 1024 * 1024 * 0.35);
 
 /**
- * What one swept event row costs to READ, counted twice.
+ * What ONE `events` row costs to read. Measured, not estimated — `healthcost.test.ts` builds
+ * the largest row the contract permits and pins this number.
  *
- * 5 459 bytes is the largest `events` row the contract permits, measured rather than
- * estimated — `healthcost.test.ts` builds it and pins the number. It is counted twice
- * because the sweep reads the row once from `by_state_updatedAt` and again when
- * `ctx.db.delete(event._id)` fetches it (see {@link PAYLOAD_ROW_OVERHEAD_BYTES} for why a
- * delete is a read).
+ * The sweep reads an event row TWICE, but at two different times and for two different
+ * populations, which is why this is 1x and the two reads are charged separately:
  *
- * Twice is exact, not merely cautious. Convex accumulates reads with
- * `tx_size.total_document_size += document_size` and does not deduplicate by document id
- * (`crates/database/src/reads.rs:487`), so reading the same row twice is charged twice. An
- * earlier draft of this comment hedged that Convex "may well charge that once" — worth
- * checking rather than hedging, since the hedge would have been an excuse to halve the
- * constant later.
+ *   the index scan — once for every row FOUND by `take(batch + 1)`
+ *   the delete     — once for every row DELETED, since a delete reads what it deletes
+ *
+ * That distinction is the whole point. An earlier version was `2 * 5_459` charged per DELETED
+ * row, which silently assumed every row found gets deleted. True when the row cap binds;
+ * false exactly when the BYTE budget binds, which is the case the budget was added for. A
+ * full `take(201)` at the cap reads about 1.1 MiB before the first budget check and was
+ * charged nothing — 140% of what the sweep thought it had spent.
+ *
+ * Worse, the error scaled with the ROW cap rather than the byte budget, so
+ * `DEFAULT_CLEANUP_LIMIT` was load-bearing for a reason recorded nowhere: at a cap of 1000
+ * the index scan alone would be 186% of this budget.
  */
-export const EVENT_ROW_READ_BYTES = 2 * 5_459;
+export const EVENT_ROW_BYTES = 5_459;
 
 /**
  * Everything a `payloads` row costs beyond the payload text itself: `_id`, `_creationTime`,
@@ -114,9 +118,21 @@ export const PAYLOAD_ROW_OVERHEAD_BYTES = 192;
  * | documents read | `TRANSACTION_MAX_READ_SIZE_ROWS` | 32 000 | ~2.5% | ~12.5% |
  * | writes | `TRANSACTION_MAX_NUM_USER_WRITES` | 16 000 | ~2.5% | ~12.5% |
  *
- * So the order is bytes, then INTERVALS at 4 096, then documents, then writes — and a reader
- * who checks documents finds eightfold headroom where the real headroom is about sixfold, on
- * a meter they did not look at.
+ * So the order is bytes, then INTERVALS at 4 096, then documents, then writes. Compare the
+ * two meters at the SAME row count, which the first version of this sentence did not:
+ *
+ * | row cap | documents headroom | intervals headroom |
+ * |---|---|---|
+ * | 200 (today) | 40x | 6.8x |
+ * | 1 000 | 8x | **1.4x** |
+ *
+ * A reader who checks documents at the current cap sees fortyfold room and concludes a five-
+ * fold raise is nothing. It is not: at 1 000 the interval meter is 73% consumed and there is
+ * essentially no margin left. The earlier version of this paragraph said "eightfold where the
+ * real headroom is about sixfold", pairing documents at 1 000 rows with intervals at 200 —
+ * two different row counts, which made the tighter meter look four times roomier than it is.
+ * The same error as everything else recorded in this file: right for the case in mind, wrong
+ * for the case the reader is in.
  *
  * Every figure is the FALLBACK path, which is the worst case. That is worth stating because
  * the first draft of this table quoted the pointer figure in one cell — 9% where the

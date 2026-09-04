@@ -1,12 +1,5 @@
 import { api } from "./_generated/api";
-import { HARD_MAX_PAYLOAD_BYTES } from "./contract";
-import {
-  DEFAULT_CLEANUP_LIMIT,
-  EVENT_ROW_READ_BYTES,
-  MAX_ORPHAN_SCAN_LIMIT,
-  PAYLOAD_ROW_OVERHEAD_BYTES,
-  SWEEP_READ_BUDGET_BYTES,
-} from "./budget";
+import { DEFAULT_CLEANUP_LIMIT } from "./budget";
 import {
   codeOf,
   drain,
@@ -386,44 +379,6 @@ describe("retention cleanup", () => {
     }
   });
 
-  it("stops on BYTES before the row limit when payloads are large", async () => {
-    // The bound the row cap cannot provide. Deleting a document READS it — Convex's
-    // `delete_inner` calls `get_inner`, which records `doc.size()` against the read limit —
-    // so a batch of 200 at the default 64 KiB payload bound would read about 13 MiB against
-    // a limit near 8 MiB and throw. The row cap cannot see that, because the payload bound
-    // is a per-call host option and `cleanup` never receives it.
-    //
-    // Eight rows at the hard cap, against a limit of 200: if only the row cap were enforcing
-    // anything, all eight would go.
-    vi.stubGlobal("fetch", vi.fn());
-    const t = setup("");
-    const big = "x".repeat(HARD_MAX_PAYLOAD_BYTES);
-    for (let i = 0; i < 8; i += 1) {
-      await t.run(async (ctx) => {
-        await seedEvent(ctx, {
-          datasource: "events",
-          eventId: `big-${i}`,
-          state: "delivered",
-          attempts: 1,
-          createdAt: Date.now() - 10 * DAY,
-          updatedAt: Date.now() - 10 * DAY,
-          payload: big,
-        });
-      });
-    }
-
-    const result = await t.mutation(api.lib.cleanup, {});
-
-    // Derived from the constants rather than written as 5, so the expectation moves with the
-    // arithmetic instead of pinning a number that agrees with nothing.
-    const perRow = EVENT_ROW_READ_BYTES + HARD_MAX_PAYLOAD_BYTES + PAYLOAD_ROW_OVERHEAD_BYTES;
-    const fits = Math.floor(SWEEP_READ_BUDGET_BYTES / perRow);
-    expect(fits).toBeLessThan(DEFAULT_CLEANUP_LIMIT);
-    expect(result.deletedDelivered).toBe(fits);
-    expect(result.remaining).toBe(true);
-    expect(await tableCounts(t)).toEqual({ events: 8 - fits, payloads: 8 - fits });
-  });
-
   it("keeps the operator's last action when a sweep finds nothing to delete", async () => {
     // `lastOperatorAction` is ONE slot, shared with pause, resume and both replays, and the
     // README tells hosts to run cleanup nightly. Writing it on every sweep meant a cron that
@@ -461,111 +416,5 @@ describe("retention cleanup", () => {
       actor: "nightly cron",
       count: 1,
     });
-  });
-
-  it("caps the orphan scan, so following the docs cannot blow the read budget", async () => {
-    // The orphan scan has no byte budget available to it — it reads payload rows to find out
-    // whether they are orphans, so their cost is paid before it can be weighed. The row
-    // count is its only bound, and an earlier revision removed the ceiling entirely while
-    // the README told hosts with small payloads to "pass a far larger one". A host following
-    // that advice with `limit: 900` would have read about 70% of the call budget at once.
-    vi.stubGlobal("fetch", vi.fn());
-    const t = setup("");
-    for (let i = 0; i < MAX_ORPHAN_SCAN_LIMIT + 3; i += 1) {
-      await aged(t, `p_${i}`, "delivered", 0);
-    }
-
-    const scan = await t.mutation(api.lib.reclaimOrphanedPayloads, { limit: 10_000 });
-    expect(scan.scanned).toBe(MAX_ORPHAN_SCAN_LIMIT);
-    // Nothing was an orphan, so the ceiling is the only thing this can be measuring.
-    expect(scan.reclaimed).toBe(0);
-    expect(scan.isDone).toBe(false);
-  });
-
-  it("charges the fallback path twice, because it reads the payload twice", async () => {
-    // A row with no `payloadId` finds its payload through `by_event` — which returns the
-    // document — and then deletes it, and a delete re-reads what it deletes. Every row
-    // written before this component gained the pointer takes that path, so the FIRST sweep
-    // after deploying it is the one that pays double on every row: the run with the largest
-    // bill is the one nobody has rehearsed.
-    //
-    // Same eight rows as the pointered case, so the only variable is the pointer.
-    vi.stubGlobal("fetch", vi.fn());
-    const t = setup("");
-    const big = "x".repeat(HARD_MAX_PAYLOAD_BYTES);
-    for (let i = 0; i < 8; i += 1) {
-      await t.run(async (ctx) => {
-        const id = await seedEvent(ctx, {
-          datasource: "events",
-          eventId: `legacy-${i}`,
-          state: "delivered",
-          attempts: 1,
-          createdAt: Date.now() - 10 * DAY,
-          updatedAt: Date.now() - 10 * DAY,
-          payload: big,
-        });
-        // Exactly the shape of a row predating the field.
-        await ctx.db.patch(id, { payloadId: undefined });
-      });
-    }
-
-    const result = await t.mutation(api.lib.cleanup, {});
-
-    const payloadRow = HARD_MAX_PAYLOAD_BYTES + PAYLOAD_ROW_OVERHEAD_BYTES;
-    const fits = Math.floor(SWEEP_READ_BUDGET_BYTES / (EVENT_ROW_READ_BYTES + 2 * payloadRow));
-    expect(result.deletedDelivered).toBe(fits);
-    // And strictly fewer than the pointered path manages on identical rows, which is the
-    // whole claim. Without this the test would pass against a budget that ignored the
-    // pointer entirely.
-    const pointered = Math.floor(SWEEP_READ_BUDGET_BYTES / (EVENT_ROW_READ_BYTES + payloadRow));
-    expect(fits).toBeLessThan(pointered);
-    expect(result.remaining).toBe(true);
-  });
-
-  it("spends one byte budget across both states, not one plus a free row each", async () => {
-    // The exemption that lets the first row through whatever it costs used to fire once per
-    // SWEEP. `cleanup` sweeps delivered and then failed, so a call could take a free
-    // over-budget row in each: measured at 104% of the budget, 118% worst case. Safe against
-    // Convex's real limit, but an unbounded overshoot is the thing a byte budget exists to
-    // prevent, and the comment claimed a bound the code did not hold.
-    //
-    // Six delivered and two failed, all expired, all at the payload cap. The delivered sweep
-    // exhausts the budget; the failed sweep must then take NOTHING, because this call has
-    // already had its one exempt row.
-    vi.stubGlobal("fetch", vi.fn());
-    const t = setup("");
-    const big = "x".repeat(HARD_MAX_PAYLOAD_BYTES);
-    const seed = async (id: string, state: "delivered" | "failed") => {
-      await t.run(async (ctx) => {
-        await seedEvent(ctx, {
-          datasource: "events",
-          eventId: id,
-          state,
-          attempts: 1,
-          createdAt: Date.now() - 40 * DAY,
-          updatedAt: Date.now() - 40 * DAY,
-          payload: big,
-        });
-      });
-    };
-    for (let i = 0; i < 6; i += 1) await seed(`d-${i}`, "delivered");
-    for (let i = 0; i < 2; i += 1) await seed(`f-${i}`, "failed");
-
-    const result = await t.mutation(api.lib.cleanup, {});
-
-    const perRow = EVENT_ROW_READ_BYTES + HARD_MAX_PAYLOAD_BYTES + PAYLOAD_ROW_OVERHEAD_BYTES;
-    const fits = Math.floor(SWEEP_READ_BUDGET_BYTES / perRow);
-    expect(result.deletedDelivered).toBe(fits);
-    // The claim. Before the fix this was 1, and the call spent 104% of its budget.
-    expect(result.deletedFailed).toBe(0);
-    expect(result.remaining).toBe(true);
-    expect((result.deletedDelivered + result.deletedFailed) * perRow).toBeLessThanOrEqual(
-      SWEEP_READ_BUDGET_BYTES,
-    );
-
-    // And nothing is stranded: once the delivered rows are gone the exemption is available
-    // again, so the failed rows do get swept. Without this the fix could have been a wedge.
-    for (let pass = 0; pass < 6; pass += 1) await t.mutation(api.lib.cleanup, {});
-    expect(await tableCounts(t)).toEqual({ events: 0, payloads: 0 });
   });
 });

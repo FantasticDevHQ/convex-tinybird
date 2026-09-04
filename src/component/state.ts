@@ -15,7 +15,7 @@ import {
   type vOperatorAction,
   type vPausedReason,
 } from "./contract";
-import { EVENT_ROW_READ_BYTES, PAYLOAD_ROW_OVERHEAD_BYTES } from "./budget";
+import { EVENT_ROW_BYTES, PAYLOAD_ROW_OVERHEAD_BYTES } from "./budget";
 import { pool } from "./pool";
 import { sanitizeMessage } from "./sanitize";
 
@@ -370,7 +370,12 @@ export async function sweepExpired(
   // 13 MiB against an 8 MiB limit. What the sweep CAN see is `payloadBytes`, recorded on
   // each event when it was enqueued — so the budget is spent against the real sizes rather
   // than against an assumption about them.
-  let bytesSpent = 0;
+  // Seeded with the INDEX SCAN, which happens above and for every row found — not only for
+  // the rows this sweep goes on to delete. Charging the scan per deleted row assumed those
+  // two populations were the same, which is true when the row cap binds and false exactly
+  // when the byte budget binds. A full page at the payload cap is about 1.1 MiB read before
+  // the first budget check.
+  let bytesSpent = found.length * EVENT_ROW_BYTES;
   let deleted = 0;
   for (const event of found.slice(0, batch)) {
     // The payload is read ONCE when the pointer is set and TWICE when it is not: the
@@ -380,8 +385,9 @@ export async function sweepExpired(
     // fallback, so the FIRST sweep after deploying it pays double on every row. Charging
     // one there would put the sweep over budget on precisely the run nobody has rehearsed.
     const payloadReads = event.payloadId === undefined ? 2 : 1;
-    const cost =
-      EVENT_ROW_READ_BYTES + payloadReads * (event.payloadBytes + PAYLOAD_ROW_OVERHEAD_BYTES);
+    // `EVENT_ROW_BYTES` once more, for the delete's own read of the event. The scan's copy is
+    // already in `bytesSpent` above.
+    const cost = EVENT_ROW_BYTES + payloadReads * (event.payloadBytes + PAYLOAD_ROW_OVERHEAD_BYTES);
     // The first row goes regardless of what it costs: one row cannot come near the limit,
     // and a sweep that declines to make progress is the wedge this component keeps
     // rediscovering — refusing the largest row would strand it, and it sorts first in every
