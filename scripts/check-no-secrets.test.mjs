@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -89,4 +90,18 @@ test("the fixture exemption is an exact prefix, not any path containing 'fixture
   assert.equal(isFixturePath("example/convex/fixtures/.env"), false);
   assert.equal(isFixturePath("tinybird/fixtures-for-demo/.tinyb"), false);
   assert.equal(isFixturePath("my-scripts/fixtures/.tinyb"), false);
+});
+
+test("outside a git checkout the gate FAILS rather than reporting clean", () => {
+  // The fail-closed catch in `trackedFiles` had the exact defect it was written to prevent:
+  // replacing its `throw` with `return []` left the whole suite green, so the property lived
+  // only in a comment — the same shape as the fixture exemption one test above. A check that
+  // reports "clean" because it could not run is this gate's own worst failure mode, and reading
+  // the git index is precisely what makes running it conditional on being in a checkout.
+  const dir = mkdtempSync(join(tmpdir(), "no-secrets-nogit-"));
+  try {
+    assert.throws(() => checkNoSecrets(dir), /must run inside a checkout/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -103,16 +103,19 @@ export const eventsByType = defineEndpoint("events_by_type", {
 });
 ```
 
-This snippet compiles against `@tinybirdco/sdk@0.0.82` under `tsc --strict`. Be precise about what
-that buys: `sql` is an opaque string the compiler cannot see into, so it type-checks the SDK's
-shapes and nothing about the query. An earlier version of this block declared only `limit` while
-its SQL referenced `{{DateTime64(start)}}` and `{{DateTime64(end)}}` — undeclared parameters,
-compiling cleanly, failing at deploy. Tinybird is the only thing that checks the SQL. The version that shipped in the first draft of this file did not — it used a
-single-object form (`defineDatasource({ name, schema })`) that the SDK has never had, raw strings
-like `"String"` where `t.*()` validators are required, and an `sql` key on the endpoint that does
-not exist in `EndpointOptions` at all. Nothing here would have caught it: a fenced block in a
-README is not compiled by any gate in this repo, and the shape was plausible enough to read as
-correct. If you change it, compile it.
+This snippet compiles against `@tinybirdco/sdk@0.0.82` under `tsc --strict`. The first draft of
+this file did not: it used a single-object form (`defineDatasource({ name, schema })`) that the
+SDK has never had, raw strings like `"String"` where `t.*()` validators are required, and an `sql`
+key on the endpoint that does not exist in `EndpointOptions` at all. Nothing here would have
+caught it — a fenced block in a README is compiled by no gate in this repo, and the shape was
+plausible enough to read as correct.
+
+Be precise about what compiling buys, though, because it is less than it sounds. `sql` is an
+opaque string the compiler cannot see into, so it type-checks the SDK's shapes and nothing about
+the query. A later version of this block declared only `limit` while its SQL referenced
+`{{DateTime64(start)}}` and `{{DateTime64(end)}}` — undeclared parameters, compiling cleanly,
+failing at deploy. Tinybird is the only thing that checks the SQL. If you change either, compile
+it AND deploy it.
 
 ## Running the smoke test
 
