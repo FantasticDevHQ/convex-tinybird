@@ -254,12 +254,16 @@ the credential, then resume.
 `pause`, `resume` and both replays record who acted. The component authenticates nobody, so wrap them in host
 mutations that authorize the caller.
 
-## Retention
+## The maintenance job
 
-Finished events are kept for a while and then removed. `cleanup` deletes `delivered` rows past
-seven days and `failed` rows past thirty, in bounded batches, and never touches an event that is
-still `pending` or `delivering` however old it is — age is not a reason to discard work nobody
-has finished.
+Two jobs the component cannot run for itself, on one cron. Neither is optional: without them a
+delivery whose process died is never retried, and finished rows accumulate forever.
+
+`requeueStuck` is crash recovery. A delivery that was in flight when its process died is left
+`delivering` with nothing working on it, and nothing else notices — the workpool item is gone, so
+there is no retry to wait for. The scan returns those rows to `pending` and reschedules them. It
+is filed here rather than under Retention because it is not about age: a stuck row is not old
+work to discard, it is live work that lost its worker.
 
 The component owns no cron. Schedule it from yours:
 
@@ -295,6 +299,24 @@ export const sweep = internalMutation({
 });
 ```
 
+Carry `cursor` forward between passes. Healthy rows are skipped rather than patched, so their age
+never moves and a loop that restarts at the head of the scan re-reads the same page forever,
+making no progress in exactly the condition the function exists for. It is a number rather than an
+opaque token because `.paginate()` is only supported in the app and never inside a component;
+treat it as opaque anyway and pass back what you were given.
+
+The second loop is the retention sweep, described under [Retention](#retention) — it is on this
+cron because the two want the same schedule, not because they are the same concern.
+
+## Retention
+
+Finished events are kept for a while and then removed. `cleanup` deletes `delivered` rows past
+seven days and `failed` rows past thirty, in bounded batches, and never touches an event that is
+still `pending` or `delivering` however old it is — age is not a reason to discard work nobody
+has finished.
+
+It is scheduled from [the maintenance job](#the-maintenance-job) above.
+
 **The dedupe window IS the delivered retention.** Identity is `(datasource, eventId)`, and a
 delivered row is what makes a repeat enqueue a `duplicate`. Once retention removes that row the
 same identity is a new event again and will be sent a second time. Seven days is the default
@@ -329,10 +351,12 @@ Nothing here produces one — but finding them means reading payloads, and a pay
 thing whose size you control, so folding that scan into the frequent sweep would make retention's
 cost depend on your event size again.
 
-Carry `cursor` forward until `isDone`. It is a number rather than an opaque token, because `.paginate()` is only supported in the app and never inside a component; treat it as opaque anyway and pass back exactly what you were given. Without that it would rescan the same
-first page forever, because healthy rows are never deleted and so occupy it permanently. The
-The default `limit` is 2, sized for the largest payload the component allows, and you may raise
-it to at most **20** — anything higher is clamped to 20 rather than honoured.
+This scan carries a `cursor` too, for the same reason as the rescue above — a payload whose event
+still exists is skipped rather than deleted, so it occupies the first page permanently and a loop
+that restarts there never reaches an orphan. Carry it forward until `isDone`.
+
+The default `limit` is 2, sized for the largest payload the component allows, and you may raise it
+to at most **20** — anything higher is clamped to 20 rather than honoured.
 
 Twenty is what the default 64 KiB payload bound affords. If your payloads are much smaller the
 read budget would allow far more — around 440 at 1 KiB — but the ceiling does not, and that is
@@ -358,10 +382,18 @@ sees that option.
 The component deliberately does not do these, and will not start.
 
 **Authorization.** It authenticates nobody. `pause`, `resume`, `replayFailed`, `replayEvent`,
-`requeueStuck` and `cleanup` are destructive or operationally significant, and every one of them
-takes an opaque `actor` string that is recorded and never checked. Authorize the caller yourself
-before invoking any of them — a `getUserIdentity` inside the component would be it making a
-policy decision on your behalf, which is why the boundary script forbids it outright.
+`requeueStuck` and `cleanup` are destructive or operationally significant, and each takes an
+opaque `actor` string that is recorded and never checked. Authorize the caller yourself before
+invoking any of them — a `getUserIdentity` inside the component would be it making a policy
+decision on your behalf, which is why the boundary script forbids it outright.
+
+`reclaimOrphanedPayloads` needs the same gate and gives you less to work with. It deletes payload
+rows, and unlike every call above it takes **no `actor` at all** and records no
+`lastOperatorAction` — so there is no audit trail of who ran it, and nothing after the fact will
+tell you. That is deliberate: it is a garbage-collection scan meant to be driven by your cron
+rather than by a person, and an `actor` on a scheduled sweep would record the scheduler, not a
+decision. If you do expose it to an operator, log the caller on your side, because the component
+will not.
 
 **Privacy of payload fields.** The payload is sent verbatim and stored until retention removes
 it. Nothing redacts, hashes or classifies it. If a field must not reach Tinybird, do not enqueue
@@ -371,6 +403,15 @@ it.
 stream unless you mount an instance per tenant or put the tenant in the payload and filter at
 read time. Neither is done for you, and an analytics dashboard that forgets it will show one
 customer another's data.
+
+**If you share a mount between tenants, `eventId` must be unique across all of them.** Identity is
+`(datasource, eventId)` within a mount, so two tenants using the same per-tenant natural key —
+each numbering its own orders from 1 — collide. The second `enqueue` throws `identity_conflict`,
+and because it runs inside the caller's mutation that error propagates and **aborts the host
+mutation**: the second tenant's order is never written at all. That is a cross-tenant denial of
+service, and it is sharper than the dashboard leak above because one tenant's ordinary traffic
+breaks another's writes. Prefix the tenant (`${tenantId}:${orderId}`), use an id that is already
+globally unique such as the Convex document id, or mount per tenant.
 
 **Scheduling.** The component owns no cron. Without the maintenance job above, a delivery whose
 process died is never retried and delivered rows are never removed.

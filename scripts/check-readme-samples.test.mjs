@@ -202,36 +202,100 @@ test("fails loudly if the client oracle stops parsing", () => {
   }
 });
 
-test("catches a method attributed to the client in PROSE, not just in a sample", () => {
-  // The one real error this guide shipped — `getStatus` described as a client call when it is a
-  // component-side query — was written in a sentence. Checks 1 and 2 read fenced blocks and were
-  // blind to it by construction, so widening the fence pattern did nothing for it.
+test("catches the BARE prose mention that actually shipped", () => {
+  // This is the literal sentence from 3813a6178. The first version of check 3 required a
+  // client-qualified span and cited this bug as its justification — and would not have caught it.
+  // The regression this pins is not "prose is unchecked", it is "the check was scoped by a
+  // justification that was false about its own example".
   const dir = copyPackage();
   try {
     const readme = join(dir, "README.md");
     writeFileSync(
       readme,
-      `${readFileSync(readme, "utf8")}\n\nOperators read one event with \`tinybird.getStatus(ctx, {})\` when triaging.\n`,
+      `${readFileSync(readme, "utf8")}\n\n**The operator controls are mount-wide.** \`enqueue\` and \`getStatus\` take a datasource, but\n`,
     );
     const failures = checkReadmeSamples(dir);
     assert.equal(failures.length, 1);
-    assert.match(failures[0], /prose attributes "getStatus\("/u);
+    assert.match(failures[0], /names "getStatus" bare/u);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("does not fire on prose naming a method the client really has", () => {
-  // The leg that stops check 3 being satisfiable by rejecting everything. Without it, a prose
-  // check that failed on every qualified span would look identical to one that works.
+test("does not fire when the component-side call is qualified as one", () => {
+  // The failure tells the author to write `components.<mount>.lib.getStatus`. If that form also
+  // failed, the gate would be demanding something it rejects and there would be no way to pass it.
   const dir = copyPackage();
   try {
     const readme = join(dir, "README.md");
     writeFileSync(
       readme,
-      `${readFileSync(readme, "utf8")}\n\nAn operator pauses a stream with \`tinybird.pause(ctx, {})\`.\n`,
+      `${readFileSync(readme, "utf8")}\n\nRead one event with \`components.productEvents.lib.getStatus\` when triaging.\n`,
     );
     assert.deepEqual(checkReadmeSamples(dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("does not fire on bare field names, which is why the oracle is derived not listed", () => {
+  // The reason check 3 does not use an allowlist: 47 of this guide's 58 identifier-shaped spans
+  // are fields, states and error codes. They never enter the set because they are not exported
+  // component functions — no list to maintain, and no failure on correct documentation.
+  const dir = copyPackage();
+  try {
+    const readme = join(dir, "README.md");
+    writeFileSync(
+      readme,
+      `${readFileSync(readme, "utf8")}\n\nThe \`payload\` and \`delivered\` fields are recorded per event.\n`,
+    );
+    assert.deepEqual(checkReadmeSamples(dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("still catches a client-qualified call that names nothing at all", () => {
+  // Bare-name coverage does not subsume this: `frobnicate` is on neither the client nor the
+  // component, so it is not in the derived set and only the qualified check sees it.
+  const dir = copyPackage();
+  try {
+    const readme = join(dir, "README.md");
+    writeFileSync(
+      readme,
+      `${readFileSync(readme, "utf8")}\n\nOperators call \`tinybird.frobnicate(ctx)\` to triage.\n`,
+    );
+    const failures = checkReadmeSamples(dir);
+    assert.equal(failures.length, 1);
+    assert.match(failures[0], /prose attributes "frobnicate\("/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the parsed client surface is exactly the 11 async methods", () => {
+  // `clientMethods` slices from the class declaration to EOF, which is only correct while the
+  // class is last in the file. A widened surface fails OPEN — check 1 stops rejecting names it
+  // should reject — and that is invisible from the outside, because the gate still passes. This
+  // pins the set so appending a second class below it fails here rather than nowhere.
+  const dir = copyPackage();
+  try {
+    const src = readFileSync(join(dir, "src", "client", "index.ts"), "utf8");
+    const body = src.slice(src.indexOf("export class TinybirdDelivery"));
+    const parsed = [...body.matchAll(/^ {2}async (\w+)\(/gmu)].map((m) => m[1]).sort();
+    assert.deepEqual(parsed, [
+      "cleanup",
+      "enqueue",
+      "health",
+      "heartbeat",
+      "pause",
+      "reclaimOrphanedPayloads",
+      "replayEvent",
+      "replayFailed",
+      "requeueStuck",
+      "resume",
+      "status",
+    ]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

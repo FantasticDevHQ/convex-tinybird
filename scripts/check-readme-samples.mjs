@@ -40,6 +40,11 @@ const CONVENTIONAL = ["tinybird", "productEvents", "auditEvents"];
 /** The public surface of `TinybirdDelivery`, read from the class rather than a hand list. */
 function clientMethods(root) {
   const source = readFileSync(join(root, "src", "client", "index.ts"), "utf8");
+  // Slicing to END OF FILE is safe only because the class is currently the last thing in it.
+  // Anything appended below with a two-space-indented `async foo(` — a second class, a helper
+  // object literal — silently JOINS the surface, and a widened surface fails OPEN: check 1 stops
+  // rejecting a name it should reject. That is the dangerous direction, and nothing else here
+  // would notice, so the self-test pins the parsed set's size rather than trusting the slice.
   const body = source.slice(source.indexOf("export class TinybirdDelivery"));
   return new Set([...body.matchAll(/^ {2}async (\w+)\(/gmu)].map((match) => match[1]));
 }
@@ -57,6 +62,19 @@ function clientMethods(root) {
  * This function is asked "is it demonstrated", never "does it exist"; conflating those two was
  * the original defect.
  */
+/**
+ * Public component functions that have no client method — the names a consumer guide can mention
+ * bare and mislead with. Derived, never hand-listed: see check 3 for why an allowlist of
+ * legitimate words is the wrong shape here.
+ */
+function componentOnlyNames(root, methods) {
+  const lib = readFileSync(join(root, "src", "component", "lib.ts"), "utf8");
+  const exported = new Set(
+    [...lib.matchAll(/^export const (\w+) = (?:mutation|query|action)\(/gmu)].map((m) => m[1]),
+  );
+  return new Set([...exported].filter((name) => !methods.has(name)));
+}
+
 function calledMethods(root) {
   const dir = join(root, "example", "convex");
   const found = new Set();
@@ -127,25 +145,50 @@ export function checkReadmeSamples(root) {
     }
   }
 
-  // CHECK 3: PROSE, on the same oracle as check 1.
+  // CHECK 3: PROSE.
   //
-  // The one real error this guide has shipped — describing `getStatus` as something you call on
-  // the client, when it is a component-side query — was written in a SENTENCE, not a sample.
-  // Checks 1 and 2 read fenced blocks only and were blind to it by construction, so widening
-  // fences did nothing for it. Most of this guide is the sentences between the samples.
+  // The one real error this guide has shipped — `getStatus` presented alongside `enqueue` as
+  // though both were things a consumer calls, when `getStatus` is a component-side query with no
+  // client method — was written in a SENTENCE, with BARE spans and no receiver:
   //
-  // Only CLIENT-QUALIFIED spans are checked: `` `tinybird.foo(` ``. A bare `` `foo` `` is not,
-  // and that is deliberate rather than an oversight — 58 identifier-shaped spans appear in this
-  // prose and 47 of them are field names, states, error codes and env vars that have nothing to
-  // do with the client surface. Checking those needs a hand-maintained allowlist that fails on
-  // correct documentation the first time someone documents a new field, and a gate that fires on
-  // correct work is a gate that gets switched off. So this catches "attributed to the client and
-  // wrong", which is the shape of the bug that actually happened, and does NOT catch a bare
-  // invented name in prose. That gap is real and stated rather than papered over.
+  //     **The operator controls are mount-wide.** `enqueue` and `getStatus` take a datasource
+  //
+  // The first version of this check required a client-qualified span, `` `tinybird.getStatus(` ``,
+  // and justified that scope by naming this very bug. It would not have caught it. That is worth
+  // recording: the comment asserted its own motivating case and was wrong about it, which is
+  // exactly the failure this gate exists to prevent, committed inside the gate.
+  //
+  // The oracle for bare names is NOT an allowlist of legitimate words. 58 identifier-shaped spans
+  // appear in this prose and 47 are fields, states, error codes and env vars; hand-listing those
+  // fails on correct documentation the first time someone documents a new field. Instead it is a
+  // set the repo can derive: names that are PUBLIC FUNCTIONS ON THE COMPONENT and NOT methods on
+  // the client. Today that is exactly `getStatus`. A field name never enters the set because it is
+  // not an exported function, and the set empties itself if `getStatus` ever gains a client
+  // method — no list to maintain, and nothing to keep in sync by hand.
+  //
+  // Naming one in a consumer guide is not automatically wrong, so the failure says what to do:
+  // qualify it as a component-side call, or give it a client method.
+  const componentOnly = componentOnlyNames(root, methods);
   const prose = readme.replace(/```[\s\S]*?```/gu, "");
+  const proseSpans = [...prose.matchAll(/`([^`\n]+)`/gu)].map((match) => match[1]);
+
+  for (const name of [...componentOnly].sort()) {
+    if (proseSpans.includes(name)) {
+      failures.push(
+        `README.md prose names "${name}" bare, and it is a component function with no ` +
+          `TinybirdDelivery method — a reader takes it for something they can call. Write it as a ` +
+          `component-side call (\`components.<mount>.lib.${name}\`) or give the client a method.`,
+      );
+    }
+  }
+
+  // Still checked, and still worth it: a client-QUALIFIED span naming a method that does not
+  // exist. Bare-name coverage above does not subsume it — `tinybird.frobnicate(` names nothing on
+  // either side and would otherwise pass.
+  const callPatternProse = new RegExp(`\\b(?:${escaped.join("|")})\\.(\\w+)\\(`, "gu");
   const proseCalls = new Set();
-  for (const span of prose.matchAll(/`([^`\n]+)`/gu)) {
-    for (const call of span[1].matchAll(callPattern)) proseCalls.add(call[1]);
+  for (const span of proseSpans) {
+    for (const call of span.matchAll(callPatternProse)) proseCalls.add(call[1]);
   }
   for (const name of [...proseCalls].sort()) {
     if (!methods.has(name)) {
