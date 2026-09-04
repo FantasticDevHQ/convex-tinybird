@@ -24,8 +24,7 @@ const READ_BUDGET_BYTES = 8 * 1024 * 1024;
 const BUDGET_SHARE = 0.35;
 
 /**
- * The measured size of the largest event the contract permits, and the tolerance the check
- * allows around it.
+ * The measured size of the largest event the contract permits.
  *
  * This is the change-detector half. The budget ceiling alone is not one: with the worst case
  * at 29% and the ceiling at 35% there is room to raise the cap by a fifth, or add a kilobyte
@@ -33,14 +32,16 @@ const BUDGET_SHARE = 0.35;
  * the ceiling bit. Pinning the row size instead means anything that changes what a row costs
  * has to come here and update the number, which is where the arithmetic lives.
  *
- * The tolerance exists only because `_creationTime` is a float whose decimal representation
- * varies by a few characters between runs — single digits of bytes on a row of 5412. Half a
- * percent is 27 bytes: comfortably above that noise, and tight enough to catch the smallest
- * bound change that matters. At three percent a widened datasource name slipped through
- * unnoticed, which is the failure mode this constant exists to prevent.
+ * Exact, not a band. An earlier version allowed a tolerance on the theory that
+ * `_creationTime` varies between runs; it does not. `installComponentTestHooks` freezes the
+ * clock with `vi.useFakeTimers()`, and convex-test only bumps a creation time when a second
+ * insert collides with the first — the events row is inserted before its payload row, so it
+ * takes the unbumped value. Measured identical across five runs. The band was also not
+ * merely redundant: at three percent it swallowed a 128-byte bound change, which is the
+ * failure it existed to catch, and even at half a percent it would have absorbed the 42
+ * bytes of unmaximal fields that verification found. An exact number cannot.
  */
 const WORST_CASE_ROW_BYTES = 5412;
-const ROW_TOLERANCE = 0.005;
 
 /** `health` counts three states, each reading one row past the cap. */
 const STATES_COUNTED = 3;
@@ -91,6 +92,10 @@ async function measureWorstCaseRow(): Promise<number> {
       deliveredAt: Date.now(),
       lastError: error(0),
       previousErrors: Array.from({ length: MAX_ERROR_HISTORY }, (_, i) => error(i + 1)),
+      // The one fill not derived from a contract bound: `workId` comes from the workpool, so
+      // 32 is an observation about its id format rather than a limit this component sets. If
+      // that format ever changes, this test reds on the row size with a failure message that
+      // will not say so — check here first.
       workId: "w".repeat(32),
       retry: {
         maxAttempts: RETRY_LIMITS.maxAttempts.max,
@@ -151,8 +156,7 @@ describe("what a full health call costs", () => {
     // A ratchet on the row itself. Anything that changes what an event costs — a new field,
     // a wider cap, a different fill — lands here and has to update the recorded number,
     // which is the same place the docblock's arithmetic is written.
-    expect(rowBytes).toBeGreaterThan(WORST_CASE_ROW_BYTES * (1 - ROW_TOLERANCE));
-    expect(rowBytes).toBeLessThan(WORST_CASE_ROW_BYTES * (1 + ROW_TOLERANCE));
+    expect(rowBytes).toBe(WORST_CASE_ROW_BYTES);
 
     // And a ceiling on the call, which is what the cap is chosen to satisfy.
     const worstCase = (STATES_COUNTED * (COUNT_CAP + 1) + HEARTBEAT_DOCUMENTS) * rowBytes;

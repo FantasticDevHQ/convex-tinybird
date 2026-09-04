@@ -91,7 +91,7 @@ What is left is the cap itself, and it is sized from a measured row rather than 
 The largest event the contract permits is about 5.4 KB — every string at its maximum, a full
 failure history, and those strings filled with the costliest characters the caps admit, because
 the caps count UTF-16 units while storage counts UTF-8 bytes. `health` counts three states and
-reads one row past the cap in each, so a full call is `3 x 151 x 5.4 KB`, roughly 2.3 MiB of the 8. A cap of 1000 would have been 15 MiB — twice the budget — on exactly the day you need the
+reads one row past the cap in each, plus two more for the heartbeat it embeds, so a full call is `(3 x 151 + 2) x 5.4 KB`, roughly 2.3 MiB of the 8. A cap of 1000 would have been 15.5 MiB — nearly twice the budget — on exactly the day you need the
 query.
 
 **Alert on `heartbeat`, not on `health`.** It reads exactly two documents however much is queued,

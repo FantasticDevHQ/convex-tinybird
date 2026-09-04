@@ -131,12 +131,13 @@ had assumed.
 Most of that gap is one thing. Every length cap here counts UTF-16 code units while Convex sizes a
 string by its UTF-8 bytes, so the most expensive string a cap admits is not ASCII: a BMP character
 outside Latin-1 is one unit and three bytes, the worst ratio available. Filled with ASCII the same
-row measures 2458 bytes; filled truthfully it measures 5370. Bounding those strings in bytes would
+row measures 2458 bytes; filled truthfully it measures 5412. Bounding those strings in bytes would
 let the cap rise again, which is FTD-2600.
 
 `health` counts three states and reads one row past the cap in each, so the worst call is
-`3 x (cap + 1) x 5.4 KB`. At the old cap of 1000 that was 15.4 MiB — **nearly twice the ~8 MiB
-budget**; at 150 it is 2.3 MiB, 29%.
+`(3 x (cap + 1) + 2) x 5.4 KB` — the two being `readHeartbeat`'s settings row and oldest waiting
+event. At the old cap of 1000 that was 15.5 MiB, **nearly twice the ~8 MiB budget**; at 150 it is
+2.3 MiB, 29%.
 
 That shape is not hypothetical: a sustained outage produces exactly that many failed rows each
 carrying a full history, so the worst case and the case an operator reaches for `health` in are

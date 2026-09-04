@@ -88,24 +88,30 @@ export const MAX_ERROR_HISTORY = 5;
  * event the contract permits — every string at its documented maximum, every optional field
  * present, and every capped string filled with the costliest characters those caps admit —
  * and it comes to about 5.4 KB. `health` counts three states and reads one row past the cap
- * in each, so the worst call is `3 x (cap + 1) x 5.4 KB` against Convex's roughly 8 MiB
- * per-call budget:
+ * in each, and `readHeartbeat` reads two more — the settings row and the oldest waiting
+ * event, the latter being the same document the pending count reads first, which Convex
+ * charges twice because it accumulates per read rather than per document. So the worst call
+ * is `(3 x (cap + 1) + 2) x 5.4 KB` against Convex's roughly 8 MiB per-call budget:
  *
  * | cap | worst call | share of budget |
  * |---|---|---|
- * | 1000 | 15.4 MiB | 192% |
- * | 250 | 3.9 MiB | 48% |
+ * | 1000 | 15.5 MiB | 194% |
+ * | 250 | 3.9 MiB | 49% |
  * | 150 | 2.3 MiB | 29% |
  *
- * That shape is not pathological: a sustained outage produces exactly that many failed
- * events each carrying a full failure history, so the worst case and the case an operator
- * reaches for `health` in are the same case.
+ * That shape is a UNION of every field's maximum, deliberately including combinations the
+ * state machine cannot produce — `deliveredAt` is only ever written alongside
+ * `state: "delivered"`, which `health` does not count, so no counted row can carry both.
+ * An upper bound that is provably unreachable is a better bound than a realistic one.
+ * The shape is not far from realistic either: a sustained outage produces exactly that
+ * many failed events each carrying a full failure history, which is why the worst case
+ * and the case an operator reaches for `health` in are close to the same case.
  *
  * Note what "largest the contract permits" had to mean. Every length cap here counts UTF-16
  * code units while Convex sizes a string by its UTF-8 bytes, so the most expensive string a
  * cap admits is not ASCII — a BMP character outside Latin-1 is one unit and three bytes, the
  * worst ratio available. An ASCII fixture measures 2458 bytes for this row and a truthful
- * one measures 5370, which is most of the gap against the 2.1 KB the ticket had estimated.
+ * one measures 5412, which is most of the gap against the 2.1 KB the ticket had estimated.
  * Capping those strings in bytes instead would let this constant rise again; that is
  * FTD-2600.
  *
