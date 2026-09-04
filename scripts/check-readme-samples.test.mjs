@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -12,7 +12,12 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 function copyPackage() {
   const dir = mkdtempSync(join(tmpdir(), "readme-samples-"));
   for (const entry of ["README.md", "example"]) {
-    cpSync(join(packageRoot, entry), join(dir, entry), { recursive: true });
+    cpSync(join(packageRoot, entry), join(dir, entry), {
+      recursive: true,
+      // `node_modules` holds a workspace symlink back to this package, so copying it recurses
+      // until the path is too long for the filesystem. Excluding it is not an optimisation.
+      filter: (source) => !source.split(sep).includes("node_modules"),
+    });
   }
   return dir;
 }
@@ -68,6 +73,65 @@ test("notices if it stops matching anything at all", () => {
       failures.some((f) => /no TypeScript samples/u.test(f)),
       failures.join("\n"),
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("sees a client the guide names something else", () => {
+  const dir = copyPackage();
+  try {
+    // The hole that mattered most: the previous version tracked three hardcoded names, so a
+    // sample calling `events.shipItRightNow(ctx)` was invisible. Client names are now derived
+    // from `new TinybirdDelivery(...)` in the sample itself.
+    const readme = join(dir, "README.md");
+    writeFileSync(
+      readme,
+      `${readFileSync(readme, "utf8")}\n\`\`\`ts\nconst events = new TinybirdDelivery(components.x);\nawait events.shipItRightNow(ctx);\n\`\`\`\n`,
+    );
+    const failures = checkReadmeSamples(dir);
+    assert.ok(
+      failures.some((f) => /shipItRightNow/u.test(f)),
+      failures.join("\n"),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("scans fences other than exactly ```ts", () => {
+  // Matching one fence tag let a wrong sample through by being labelled ```typescript, and
+  // again as ```js. A guide is written by whoever reaches for whichever tag comes to mind.
+  for (const fence of ["typescript", "js", "javascript", "tsx"]) {
+    const dir = copyPackage();
+    try {
+      const readme = join(dir, "README.md");
+      writeFileSync(
+        readme,
+        `${readFileSync(readme, "utf8")}\n\`\`\`${fence}\nawait tinybird.neverExisted(ctx);\n\`\`\`\n`,
+      );
+      const failures = checkReadmeSamples(dir);
+      assert.ok(
+        failures.some((f) => /neverExisted/u.test(f)),
+        `fence ${fence} was not scanned: ${failures.join("\n")}`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("still passes a sample that calls something real", () => {
+  // The control. A gate that fails on everything is not a gate, and every case above would
+  // pass under one.
+  const dir = copyPackage();
+  try {
+    const readme = join(dir, "README.md");
+    writeFileSync(
+      readme,
+      `${readFileSync(readme, "utf8")}\n\`\`\`ts\nawait productEvents.enqueue(ctx, {});\n\`\`\`\n`,
+    );
+    assert.deepEqual(checkReadmeSamples(dir), []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

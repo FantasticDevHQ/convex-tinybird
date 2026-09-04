@@ -63,6 +63,8 @@ tested — a sample that only lives in a README rots.
 
 ```ts
 import { TinybirdDelivery } from "@fantastic-dev/convex-tinybird";
+import { v } from "convex/values";
+
 import { components } from "./_generated/api";
 import { mutation } from "./_generated/server";
 
@@ -212,7 +214,7 @@ returns `repaired`. Anything else with that identity is a conflict, checked agai
 length and content fingerprint the event row kept — enough to catch an accidental substitution,
 not a deliberate one.
 
-**The operator controls are mount-wide.** `enqueue` and `getStatus` take a datasource, but
+**The operator controls are mount-wide.** `enqueue` and `status` take a datasource, but
 `pause`, `resume`, `health` and `replayFailed` do not, so a mount carrying more than one
 datasource cannot act on them independently — replaying to fix one datasource resends the
 other's dead letters too. Mount the component once per datasource.

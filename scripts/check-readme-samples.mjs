@@ -15,8 +15,29 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Client methods and component surfaces a sample may reference. */
-const TRACKED = /\b(?:tinybird|productEvents|auditEvents)\.(\w+)\(/gu;
+/**
+ * Fences that hold TypeScript. Matching only ```ts was a hole: verification passed a wrong
+ * sample through simply by fencing it as ```typescript, and again as ```js. A guide is written
+ * by people who reach for whichever tag comes to mind.
+ */
+const TS_FENCE = /```(?:ts|typescript|js|javascript|tsx|jsx)\n([\s\S]*?)```/gu;
+
+/**
+ * Which variables in a sample are component clients.
+ *
+ * DERIVED from the sample, not hardcoded. The previous version tracked three names it happened
+ * to know, so a sample calling `events.shipItRightNow(ctx)` was invisible — verification showed
+ * exactly that passing. Anything constructed with `new TinybirdDelivery(...)` is a client, plus
+ * the names the guide conventionally uses, so a sample that shows only the call still counts.
+ */
+const CONVENTIONAL = ["tinybird", "productEvents", "auditEvents"];
+
+function clientNames(block) {
+  const declared = [
+    ...block.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*new TinybirdDelivery\b/gu),
+  ].map((match) => match[1]);
+  return new Set([...declared, ...CONVENTIONAL]);
+}
 
 export function checkReadmeSamples(root) {
   const failures = [];
@@ -29,7 +50,7 @@ export function checkReadmeSamples(root) {
     .map((entry) => readFileSync(join(exampleDir, entry), "utf8"))
     .join("\n");
 
-  const blocks = [...readme.matchAll(/```ts\n([\s\S]*?)```/gu)].map((match) => match[1]);
+  const blocks = [...readme.matchAll(TS_FENCE)].map((match) => match[1]);
   if (blocks.length === 0) {
     failures.push(
       "README.md: no TypeScript samples found — the matcher is looking in the wrong place",
@@ -38,7 +59,9 @@ export function checkReadmeSamples(root) {
 
   const used = new Set();
   for (const block of blocks) {
-    for (const match of block.matchAll(TRACKED)) used.add(match[1]);
+    const names = [...clientNames(block)].map((n) => n.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+    const pattern = new RegExp(`\\b(?:${names.join("|")})\\.(\\w+)\\(`, "gu");
+    for (const match of block.matchAll(pattern)) used.add(match[1]);
   }
   if (used.size === 0) {
     failures.push(

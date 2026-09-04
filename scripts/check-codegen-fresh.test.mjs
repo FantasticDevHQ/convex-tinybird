@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -24,7 +24,7 @@ function copyPackage() {
       recursive: true,
       filter: (source) =>
         !source
-          .split("/")
+          .split(sep)
           .some((part) => part === "node_modules" || part === ".convex" || part.startsWith(".env")),
     });
   }
