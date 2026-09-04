@@ -1,4 +1,5 @@
 import { api } from "./_generated/api";
+import { type WorkId, pool } from "./pool";
 import {
   drain,
   installComponentTestHooks,
@@ -455,6 +456,28 @@ describe("how the scan walks", () => {
       count: 8,
     });
     expect(before.indexOf("victim")).toBeGreaterThan(3);
+
+    // The LIVENESS half of the fixture, asserted rather than merely set up. Verification
+    // mutated `liveWorkIds` so nothing was ever considered alive — which removes the crowding
+    // condition entirely — and this test did not fail. So it was passing whether or not those
+    // seven rows had live items: if `resume` ever silently failed to schedule them it would
+    // still be green, and it would no longer be a crowding test at all.
+    //
+    // Position was the right instinct applied to one of the two axes. This is the other.
+    const statuses = await t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("events")
+        .withIndex("by_state_updatedAt", (q) => q.eq("state", "delivering"))
+        .take(50);
+      return Promise.all(
+        rows.map(async (event) => ({
+          id: event.eventId,
+          state: (await pool.status(ctx, event.workId as WorkId)).state,
+        })),
+      );
+    });
+    expect(statuses.find((entry) => entry.id === "victim")?.state).toBe("finished");
+    expect(statuses.filter((entry) => entry.state !== "finished")).toHaveLength(7);
 
     let cursor:
       | Awaited<ReturnType<typeof t.mutation<typeof api.recovery.requeueStuck>>>["cursor"]
