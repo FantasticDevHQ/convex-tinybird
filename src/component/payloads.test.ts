@@ -277,14 +277,10 @@ describe("the payload lives outside the counted row", () => {
     // A floor, so an empty or mis-scoped glob cannot pass by reading nothing at all.
     expect(files.length).toBeGreaterThan(6);
 
+    const sourceOf = (name: string) =>
+      readFileSync(new URL(name, dir), "utf8").replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//gu, "");
     const reads = Object.fromEntries(
-      files.map((name) => {
-        const source = readFileSync(new URL(name, dir), "utf8").replace(
-          /\/\/[^\n]*|\/\*[\s\S]*?\*\//gu,
-          "",
-        );
-        return [name, (source.match(/query\("payloads"\)/gu) ?? []).length];
-      }),
+      files.map((name) => [name, (sourceOf(name).match(/query\("payloads"\)/gu) ?? []).length]),
     );
 
     // Three reads, each one justified, and the whole point is that there are no others.
@@ -293,16 +289,31 @@ describe("the payload lives outside the counted row", () => {
     // tell a duplicate from a conflict. `lifecycle.ts` — `loadForDelivery`, which needs it
     // to send. Both run once per event, not once per paged read.
     //
-    // `state.ts` has TWO, and both are deliberate. Retention deletes a payload by the id its
-    // event carries, which reads nothing; the index lookup is the fallback for a row whose
-    // pointer was never recorded, because leaking a payload is worse than paying for one
-    // read. The second is the orphan reclaim, which cannot avoid reading payload rows — and
-    // is a separate call for exactly that reason, so the frequent sweep stays cheap and the
-    // rare scan is allowed to be expensive.
-    expect(reads).toMatchObject({ "lib.ts": 1, "lifecycle.ts": 1, "state.ts": 2 });
+    // `state.ts` has two, and WHERE they are is the claim — not how many. Counting per file
+    // cannot see a read moved from a justified function into a paged loop in the same file,
+    // and verification demonstrated exactly that: deleting the fallback and putting a
+    // per-row read inside `sweepExpired` left the count at one and the test green — which is
+    // the defect this guard's own comment says it exists to catch.
+    //
+    // So each read is bound to the function allowed to make it.
+    const bodyOf = (source: string, fn: string) => {
+      const start = source.indexOf(`export async function ${fn}`);
+      expect(start).toBeGreaterThan(-1);
+      const end = source.indexOf("\n}", start);
+      return source.slice(start, end === -1 ? undefined : end);
+    };
+    const state = sourceOf("state.ts");
+    const readsIn = (fn: string) => (bodyOf(state, fn).match(/query\("payloads"\)/gu) ?? []).length;
 
-    // Nowhere else, whatever else the component grows. Reported by name so a failure says
-    // which file gained a consumer rather than only that a count moved.
+    // The fallback for a row whose pointer was never recorded: leaking a payload is worse
+    // than paying for one read, and it is bounded to rows that should not exist.
+    expect(readsIn("deleteEventWithPayload")).toBe(1);
+    // The orphan scan cannot avoid reading payloads, which is why it is a separate, rarer
+    // call with a much smaller limit rather than part of the sweep.
+    expect(readsIn("sweepOrphanedPayloads")).toBe(1);
+    // And the paged path makes none, which is the whole point of the pointer.
+    expect(readsIn("sweepExpired")).toBe(0);
+
     const justified = ["lib.ts", "lifecycle.ts", "state.ts"];
     const unexpected = Object.keys(reads).filter(
       (name) => !justified.includes(name) && reads[name] > 0,

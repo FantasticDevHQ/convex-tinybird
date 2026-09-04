@@ -179,6 +179,7 @@ export class TinybirdDelivery {
       deliveredRetentionMs?: number;
       failedRetentionMs?: number;
       limit?: number;
+      actor?: string;
     } = {},
   ): Promise<{ deletedDelivered: number; deletedFailed: number; remaining: boolean }> {
     return ctx.runMutation(this.component.lib.cleanup, args);

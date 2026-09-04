@@ -26,6 +26,13 @@ const BUDGET_SHARE = 0.35;
 /**
  * The share it actually occupies, as documented on `COUNT_CAP`.
  *
+ * The tolerance is 0.0005, which is about twice what the four-byte row step can move the
+ * share (455 documents x 4 bytes is 0.02 of a point). It was 0.002 and that was too loose:
+ * it absorbed a published figure that was simply wrong — 29.7% where the arithmetic gives
+ * 29.6% — so the change detector stayed green while both documents printed a false number.
+ * That is the fourth time on this component a margin has swallowed the thing it was there
+ * to catch.
+ *
  * Pinned separately from the ceiling because the two say different things. The ceiling is a
  * safety bound with deliberate headroom, so it does not notice a change that stays inside
  * it: at 29.4% actual against a 35% ceiling the cap could be raised from 150 to about 178
@@ -33,8 +40,8 @@ const BUDGET_SHARE = 0.35;
  * combination of cap and row against the number the docblock publishes, so either moving
  * has to come here.
  */
-const DOCUMENTED_SHARE = 0.297;
-const SHARE_TOLERANCE = 0.002;
+const DOCUMENTED_SHARE = 0.296;
+const SHARE_TOLERANCE = 0.0005;
 
 /**
  * The measured size of the largest event the contract permits.

@@ -7,6 +7,7 @@ import {
   installComponentTestHooks,
   jsonResponse,
   seedEvent,
+  settingsOf,
   setup,
   type TestInstance,
 } from "../testing/fixtures";
@@ -67,6 +68,22 @@ describe("retention cleanup", () => {
     });
     // A `failed` row ten days old survives: its retention is thirty, not seven.
     expect(left).toEqual(["new_delivered", "new_failed"]);
+  });
+
+  it("records that it ran, and how much it removed", async () => {
+    // A sweep that deletes data and says nothing is the shape in which a wedged sweep
+    // reaches production: the only symptom is tables that quietly grow. Every other operator
+    // action here records itself, and this one has the strongest claim to.
+    vi.stubGlobal("fetch", vi.fn());
+    const t = setup("");
+    await aged(t, "a", "delivered", 10 * DAY);
+    await aged(t, "b", "failed", 40 * DAY);
+
+    await t.mutation(api.lib.cleanup, { actor: "nightly_cron" });
+
+    expect(await settingsOf(t)).toMatchObject({
+      lastOperatorAction: { kind: "cleanup", actor: "nightly_cron", count: 2 },
+    });
   });
 
   it("never touches an event that is still in flight, however old", async () => {

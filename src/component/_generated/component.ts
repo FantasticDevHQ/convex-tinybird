@@ -28,6 +28,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "mutation",
         "internal",
         {
+          actor?: string;
           deliveredRetentionMs?: number;
           failedRetentionMs?: number;
           limit?: number;
@@ -141,7 +142,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             actor?: string;
             at: number;
             count?: number;
-            kind: "pause" | "resume" | "replayFailed" | "replayEvent";
+            kind:
+              "pause" | "resume" | "replayFailed" | "replayEvent" | "cleanup";
           };
           oldestPendingAgeMs: number | null;
           paused: boolean;
@@ -178,7 +180,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             actor?: string;
             at: number;
             count?: number;
-            kind: "pause" | "resume" | "replayFailed" | "replayEvent";
+            kind:
+              "pause" | "resume" | "replayFailed" | "replayEvent" | "cleanup";
           };
           oldestPendingAgeMs: number | null;
           paused: boolean;

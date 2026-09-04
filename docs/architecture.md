@@ -137,7 +137,7 @@ let the cap rise again, which is FTD-2600.
 `health` counts three states and reads one row past the cap in each, so the worst call is
 `(3 x (cap + 1) + 2) x 5.4 KB` — the two being `readHeartbeat`'s settings row and oldest waiting
 event. At the old cap of 1000 that was 15.5 MiB, **nearly twice the ~8 MiB budget**; at 150 it is
-2.37 MiB, 29.7%.
+2.37 MiB, 29.6%.
 
 That shape is not hypothetical: a sustained outage produces exactly that many failed rows each
 carrying a full history, so the worst case and the case an operator reaches for `health` in are

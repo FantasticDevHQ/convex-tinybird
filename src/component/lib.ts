@@ -287,6 +287,7 @@ export const cleanup = mutation({
     deliveredRetentionMs: v.optional(v.number()),
     failedRetentionMs: v.optional(v.number()),
     limit: v.optional(v.number()),
+    actor: v.optional(v.string()),
   },
   returns: v.object({
     deletedDelivered: v.number(),
@@ -325,6 +326,20 @@ export const cleanup = mutation({
       now - failedRetentionMs,
       budget - delivered.deleted,
     );
+
+    // Recorded like every other operator action, and for a stronger reason than the rest:
+    // this one destroys data, and until it wrote something here a sweep that stopped running
+    // was completely silent. A wedged sweep would have shown up only as tables that quietly
+    // grew, which is how the stale-pointer defect would have reached production.
+    const deleted = delivered.deleted + failed.deleted;
+    await patchSettings(ctx, {
+      lastOperatorAction: {
+        kind: "cleanup" as const,
+        actor: recordActor(args.actor),
+        at: now,
+        count: deleted,
+      },
+    });
 
     return {
       deletedDelivered: delivered.deleted,

@@ -162,7 +162,7 @@ export const sweep = internalMutation({
     // Bounded, like every loop against this component. Ten passes at the default limit is
     // 2000 rows per state.
     for (let pass = 0; pass < 10; pass += 1) {
-      const { remaining } = await tinybird.cleanup(ctx);
+      const { remaining } = await tinybird.cleanup(ctx, { actor: "nightly cron" });
       if (!remaining) break;
     }
   },
@@ -188,6 +188,10 @@ window, which matters because those are exactly the events a producer is most li
 A retention that is negative, `NaN` or infinite is refused with `code: "invalid_retention"`
 rather than clamped. `NaN` is the reason: Convex orders it above every finite number, so a sweep
 given one would match every row of that state and delete events seconds old.
+
+Each sweep records itself in `lastOperatorAction` with the `actor` you pass and how many rows
+it removed, so a sweep that stops running is visible rather than showing up only as tables that
+quietly grow.
 
 `reclaimOrphanedPayloads` is a separate, rarer call for payload rows whose event has gone.
 Nothing here produces one — but finding them means reading payloads, and a payload is the one

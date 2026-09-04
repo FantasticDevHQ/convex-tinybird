@@ -94,9 +94,14 @@ export const DEFAULT_FAILED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
  * How many rows one `cleanup` call removes, per state, by default.
  *
  * Deleting a row costs one read of the event and one write; the payload is deleted by id and
- * read not at all, which is why `payloadId` exists. So a batch of `n` is about `n x 5.4 KB`
- * against Convex's roughly 8 MiB per-call limit — 200 rows is near 1.1 MiB per state, and the
- * two states together stay comfortably inside it.
+ * read not at all, which is why `payloadId` exists. The limit is spent ONCE across both
+ * states, not once each, so a full batch is `200 x 5.4 KB` read and the same written — about
+ * 1.1 MiB each way against Convex's roughly 8 MiB per-call limit, whatever the mix of
+ * delivered and failed rows.
+ *
+ * That is two hundred times the cost of one row and a fortieth of the budget, so the number
+ * is chosen for how much work one transaction should reasonably do rather than because the
+ * bytes bind.
  *
  * Reading the payload back to find it would put the cost on the payload size instead, which
  * is the coupling FTD-2525 removed: 200 rows at the default 64 KiB bound would be 12.9 MiB
@@ -128,14 +133,14 @@ export const MAX_ERROR_HISTORY = 5;
  * event, the latter being the same document the pending count reads first, which Convex
  * charges twice because it accumulates per read rather than per document. So the worst call
  * is `(3 x (cap + 1) + 2) x 5.4 KB` against Convex's roughly 8 MiB per-call budget.
- * `healthcost.test.ts` pins the 29.7% figure below as well as the row size, so raising the
+ * `healthcost.test.ts` pins the 29.6% figure below as well as the row size, so raising the
  * cap has to come here even while it would still be safe:
  *
  * | cap | worst call | share of budget |
  * |---|---|---|
  * | 1000 | 15.65 MiB | 195.6% |
  * | 250 | 3.93 MiB | 49.1% |
- * | 150 | 2.37 MiB | 29.7% |
+ * | 150 | 2.37 MiB | 29.6% |
  *
  * That shape is a UNION of every field's maximum, deliberately including combinations the
  * state machine cannot produce — `deliveredAt` is only ever written alongside
@@ -261,6 +266,7 @@ export const vOperatorAction = v.object({
     v.literal("resume"),
     v.literal("replayFailed"),
     v.literal("replayEvent"),
+    v.literal("cleanup"),
   ),
   actor: v.optional(v.string()),
   at: v.number(),
