@@ -68,6 +68,7 @@ export const FORBIDDEN_SOURCE_PATTERNS = [
 
 /** Import specifiers that mean the component reached into the host or the monorepo. */
 export const FORBIDDEN_SPECIFIER_PATTERNS = [
+  /^@tinybirdco\/sdk(?:\/|$)/, // Host-only definition/deployment SDK, never component runtime.
   /^@fantastic-dev\//,
   /(^|\/)packages\/backend(\/|$)/,
   /^better-auth(\/|$)/,

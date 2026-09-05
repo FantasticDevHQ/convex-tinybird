@@ -161,3 +161,10 @@ test("the same regex in the COMPONENT is still refused", () => {
   assert.ok(failures.length >= 1);
   assert.match(failures.join("\n"), /unterminated/u);
 });
+
+test("host infrastructure and its server SDK cannot enter the component", () => {
+  const failures = checkBoundary(fixture("host-infrastructure"));
+  assert.equal(failures.length, 2);
+  assert.ok(failures.some((failure) => failure.includes("@fantastic-dev/tinybird-infra")));
+  assert.ok(failures.some((failure) => failure.includes("@tinybirdco/sdk")));
+});
