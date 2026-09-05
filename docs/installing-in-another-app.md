@@ -129,6 +129,9 @@ app.use(tinybird, {
 });
 ```
 
+Use the workspace token with `ADMIN` scope for signing. A personal or CLI token with
+`ADMIN_USER` scope is not a JWT signing key, even when it can ingest or query that workspace.
+
 Using securely supplied values, set `PRODUCT_TINYBIRD_ADMIN_TOKEN` and
 `PRODUCT_TINYBIRD_WORKSPACE_ID` with `convex env set`, then re-push the app configuration as
 above. Repeat with the audit mount's own variables if it also supports reads. A shared workspace
@@ -179,3 +182,16 @@ their cause is fixed. Follow the [operator guide](../README.md#pausing-and-resum
 Keep mount names, destination mappings, and event identities stable during upgrades. Changing a
 mount's destination while it has a backlog can send its pending events to the new destination;
 treat that as a data migration, not a routine installation step.
+
+For browser readers, add security checks in each consuming app. Create an authenticated caller,
+then remove its membership or downgrade its role and verify the issuer returns the same denial
+as a foreign tenant or project request, without calling `mintReadToken`. Against that app's
+Tinybird schema, sign a read JWT fixed to tenant A and request tenant B through URL parameters;
+only A's data may return. The package's `/test` entry exports `signReadToken` for these checks;
+use synthetic or Local-only signing keys. Verify that an expired JWT is refused. Run these checks against Local
+before using staging credentials.
+
+Inspect the consuming app's production bundle as well. Reject the Tinybird server SDK by its
+bundled module identity, since minification can erase package names. Scan emitted scripts and
+source maps for static Tinybird tokens and server environment names. These are host build checks;
+installing the component does not configure another app's bundler or authorization tests.

@@ -5,6 +5,9 @@ import type { GenericSchema, SchemaDefinition } from "convex/server";
 
 import schema from "./component/schema";
 
+/** Use the production signer with synthetic or Local-only keys in host integration tests. */
+export { signReadToken } from "./component/jwt";
+
 export const modules = import.meta.glob("./component/**/*.ts");
 
 /**
