@@ -17,8 +17,8 @@ switch stopping both streams, would pass there and fail here.
 
 - **Runtime dependencies** are enforced by `scripts/check-boundary.mjs`, which scans
   `example/convex` as well as `src`. It permits `@fantastic-dev/convex-tinybird` and rejects
-  every other `@fantastic-dev/` package, `packages/backend`, Better Auth, and any read of the
-  caller's identity.
+  every other `@fantastic-dev/` package, `packages/backend`, and Better Auth. Component-only
+  restrictions on identity reads do not apply to the host example.
 - **The tsconfig extends the repository's base**, and that is not a hole in the claim: it is a
   build setting, not a dependency, and a real consumer writes their own. The dependency claim
   lives in `package.json` and in the boundary script, both of which are checked.
@@ -56,14 +56,9 @@ CONVEX_AGENT_MODE=anonymous npx convex dev --once     # re-push so the mounts pi
 Check it took: `health.configured` must be `true` on both mounts. If it is `false`, the tokens
 did not reach the deployment and every enqueue will sit there silently.
 
-Note that `pnpm codegen` in this package's `package.json` is **not** the command to run: app-level
-`convex codegen` needs a deployment and fails with `No CONVEX_DEPLOYMENT set` on a fresh clone.
-Use the `convex dev --once` line above, which provisions one and generates.
-
-The last command provisions a local deployment and regenerates `convex/_generated`, which is
-committed. It also rewrites the component's own `_generated`, because a component's generated
-code is produced by pushing a host that mounts it — `convex codegen --component-dir` needs a real
-deployment and cannot do it standalone.
+`pnpm codegen` runs `CONVEX_AGENT_MODE=anonymous convex dev --once`. It provisions a local
+deployment and regenerates `convex/_generated`, which is committed. It also regenerates the
+component's `_generated` files through the host app that mounts it.
 
 ## Files
 

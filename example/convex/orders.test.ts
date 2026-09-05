@@ -184,6 +184,29 @@ describe("adopting the component in an unrelated app", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("accepts an identical datasource and event id independently in both mounts", async () => {
+    const fetchSpy = acceptEverything();
+    const t = setup();
+    const identity = { datasource: "shared_events", eventId: "same-event" };
+
+    for (const name of ["productEvents", "auditEvents"] as const) {
+      await expect(
+        t.mutation(components[name].lib.enqueue, {
+          ...identity,
+          payload: { stream: name },
+        }),
+      ).resolves.toMatchObject({ outcome: "enqueued" });
+    }
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    for (const name of ["productEvents", "auditEvents"] as const) {
+      expect(await t.query(components[name].lib.getStatus, identity)).toMatchObject({
+        state: "delivered",
+      });
+    }
+  });
+
   it("replays a dead letter after the destination recovers", async () => {
     // Rejected permanently, then replayed once the destination is healthy — the operator path
     // a consumer actually needs, exercised through the mounted instance rather than the
