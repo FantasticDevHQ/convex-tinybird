@@ -4,7 +4,7 @@
  * Pure, so the whole decision table is unit-testable without a network or a deployment.
  * See https://www.tinybird.co/docs/api-reference/events-api for the status codes.
  */
-import type { FailureCategory } from "./contract";
+import type { FailureCategory } from "./contract.js";
 
 /** What the caller should do with an event after one delivery attempt. */
 export type ClassifiedResponse =

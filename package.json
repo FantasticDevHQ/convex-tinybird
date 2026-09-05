@@ -6,13 +6,25 @@
   "sideEffects": false,
   "description": "Reusable Convex component for shipping analytics events to Tinybird, independent of any host application's schema, auth or packages.",
   "exports": {
-    ".": "./src/client/index.ts",
-    "./browser": "./src/browser/index.ts",
-    "./convex.config": "./src/component/convex.config.ts",
-    "./convex.config.js": "./src/component/convex.config.ts",
+    ".": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "default": "./dist/browser/index.js"
+    },
+    "./convex.config": {
+      "types": "./dist/component/convex.config.d.ts",
+      "default": "./dist/component/convex.config.js"
+    },
+    "./convex.config.js": {
+      "types": "./dist/component/convex.config.d.ts",
+      "default": "./dist/component/convex.config.js"
+    },
     "./test": "./src/test.ts",
     "./_generated/component.js": {
-      "types": "./src/component/_generated/component.ts"
+      "types": "./dist/component/_generated/component.d.ts"
     }
   },
   "scripts": {
@@ -21,7 +33,11 @@
     "codegen": "convex codegen --component-dir src/component",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "check": "pnpm run typecheck && pnpm run test && pnpm run check:boundary && pnpm run check:secrets && node scripts/check-codegen-fresh.mjs && node scripts/check-readme-samples.mjs && node --test scripts/check-boundary.test.mjs scripts/check-no-secrets.test.mjs scripts/check-codegen-fresh.test.mjs scripts/check-readme-samples.test.mjs && pnpm --filter @fantastic-dev/convex-tinybird-example run typecheck && pnpm --filter @fantastic-dev/convex-tinybird-example run test"
+    "check": "pnpm run check:pack && node --test scripts/check-pack.test.mjs && pnpm run typecheck && pnpm run test && pnpm run check:boundary && pnpm run check:secrets && node scripts/check-codegen-fresh.mjs && node scripts/check-readme-samples.mjs && node --test scripts/check-boundary.test.mjs scripts/check-no-secrets.test.mjs scripts/check-codegen-fresh.test.mjs scripts/check-readme-samples.test.mjs && pnpm --dir example run typecheck && pnpm --dir example run test",
+    "build": "tsc --project tsconfig.build.json",
+    "check:pack": "pnpm run build && node scripts/check-pack.mjs",
+    "prepack": "pnpm run build",
+    "prepare": "pnpm run build"
   },
   "peerDependencies": {
     "convex": "^1.44.0"
@@ -31,9 +47,19 @@
     "convex": "^1.44.0",
     "convex-test": "^0.0.55",
     "vite": "8.2.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@convex-dev/workpool": "0.4.10"
-  }
+  },
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "src",
+    "docs",
+    "CHANGELOG.md"
+  ],
+  "types": "./dist/client/index.d.ts",
+  "module": "./dist/client/index.js"
 }

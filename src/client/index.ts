@@ -6,8 +6,8 @@
  */
 import type { GenericDataModel, GenericMutationCtx, GenericQueryCtx } from "convex/server";
 
-import type { ComponentApi } from "../component/_generated/component";
-import type { ReadTokenScope } from "../component/jwt";
+import type { ComponentApi } from "../component/_generated/component.js";
+import type { ReadTokenScope } from "../component/jwt.js";
 
 export type MintReadTokenArgs = {
   name: string;
@@ -39,7 +39,7 @@ import {
   type RetryConfig,
   type TinybirdDeliveryOptions,
   resolveTinybirdDeliveryOptions,
-} from "../component/contract";
+} from "../component/contract.js";
 
 export {
   COUNT_CAP,
@@ -68,7 +68,7 @@ export {
   vOperatorAction,
   vPausedReason,
   vRetryConfig,
-} from "../component/contract";
+} from "../component/contract.js";
 export type {
   BoundedCount,
   DeliveryError,
@@ -86,7 +86,7 @@ export type {
   ResolvedTinybirdDeliveryOptions,
   RetryConfig,
   TinybirdDeliveryOptions,
-} from "../component/contract";
+} from "../component/contract.js";
 
 /** The subset of a Convex context the client needs: any query, mutation or action ctx. */
 export type RunQueryCtx = { runQuery: GenericQueryCtx<GenericDataModel>["runQuery"] };

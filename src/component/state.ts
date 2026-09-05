@@ -1,10 +1,10 @@
 import { ConvexError } from "convex/values";
 import type { Infer } from "convex/values";
 
-import { hasAppendToken, readAppendToken } from "./credentials";
-import { internal } from "./_generated/api";
-import type { Doc, Id } from "./_generated/dataModel";
-import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { hasAppendToken, readAppendToken } from "./credentials.js";
+import { internal } from "./_generated/api.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
+import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import {
   type BoundedCount,
   COUNT_CAP,
@@ -14,10 +14,10 @@ import {
   type vHeartbeat,
   type vOperatorAction,
   type vPausedReason,
-} from "./contract";
-import { EVENT_ROW_BYTES, PAYLOAD_ROW_OVERHEAD_BYTES } from "./budget";
-import { pool } from "./pool";
-import { sanitizeMessage } from "./sanitize";
+} from "./contract.js";
+import { EVENT_ROW_BYTES, PAYLOAD_ROW_OVERHEAD_BYTES } from "./budget.js";
+import { pool } from "./pool.js";
+import { sanitizeMessage } from "./sanitize.js";
 
 /**
  * State transitions and the reads that summarise them.

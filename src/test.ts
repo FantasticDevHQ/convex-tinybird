@@ -3,10 +3,10 @@ import workpool from "@convex-dev/workpool/test";
 import type { TestConvex } from "convex-test";
 import type { GenericSchema, SchemaDefinition } from "convex/server";
 
-import schema from "./component/schema";
+import schema from "./component/schema.js";
 
 /** Use the production signer with synthetic or Local-only keys in host integration tests. */
-export { signReadToken } from "./component/jwt";
+export { signReadToken } from "./component/jwt.js";
 
 export const modules = import.meta.glob("./component/**/*.ts");
 

@@ -9,6 +9,7 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -32,6 +33,18 @@ export function copyForCodegen(root) {
     ]) {
       cpSync(join(root, entry), join(directory, entry), { recursive: true });
     }
+    // Regenerate source declarations, independently of a previously compiled dist tree.
+    // Published exports point at dist; only this disposable codegen copy points at source.
+    const manifestPath = join(directory, "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.exports["."] = "./src/client/index.ts";
+    manifest.exports["./browser"] = "./src/browser/index.ts";
+    manifest.exports["./_generated/component.js"] = {
+      types: "./src/component/_generated/component.ts",
+    };
+    manifest.exports["./convex.config"] = "./src/component/convex.config.ts";
+    manifest.exports["./convex.config.js"] = "./src/component/convex.config.ts";
+    writeFileSync(manifestPath, JSON.stringify(manifest));
     symlinkSync(resolve(root, "node_modules"), join(directory, "node_modules"), "dir");
     const name = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).name;
     const self = join(directory, "example/node_modules", name);

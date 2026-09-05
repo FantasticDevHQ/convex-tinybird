@@ -7,7 +7,7 @@ import {
   vOperatorAction,
   vPausedReason,
   vRetryConfig,
-} from "./contract";
+} from "./contract.js";
 
 /**
  * One row per event. The row IS the dedupe record: identity `(datasource, eventId)` is

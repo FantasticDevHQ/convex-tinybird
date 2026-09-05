@@ -1,11 +1,11 @@
 import { vOnCompleteArgs } from "@convex-dev/workpool";
 import { v } from "convex/values";
 
-import { internalMutation, internalQuery } from "./_generated/server";
-import { vDeliveryError, vEventState, vPausedReason } from "./contract";
-import { readAppendToken } from "./credentials";
-import { patchSettings, pushHistory } from "./state";
-import { sanitizeMessage } from "./sanitize";
+import { internalMutation, internalQuery } from "./_generated/server.js";
+import { vDeliveryError, vEventState, vPausedReason } from "./contract.js";
+import { readAppendToken } from "./credentials.js";
+import { patchSettings, pushHistory } from "./state.js";
+import { sanitizeMessage } from "./sanitize.js";
 
 /**
  * The delivery state machine, as Convex functions.

@@ -1,6 +1,6 @@
 import { Workpool, type WorkId } from "@convex-dev/workpool";
 
-import { components } from "./_generated/api";
+import { components } from "./_generated/api.js";
 
 /**
  * The component's own delivery pool.

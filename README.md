@@ -462,3 +462,11 @@ changed validators, missing files, and obsolete output without rewriting your ch
 your deployment credentials. Convex may download its local backend binary on the first run;
 the delivery test suites themselves use stubbed HTTP transport. No Tinybird credentials are needed.
 The temporary local deployment is removed when the check finishes.
+
+## Package artifact
+
+Workspace installation builds the package through `prepare`, so lint, tests and development commands can resolve exports on a fresh checkout. Run `pnpm --filter @fantastic-dev/convex-tinybird build` to rebuild ESM and TypeScript declarations in `dist` after source changes. Client, browser and component configuration exports use the compiled files. The `test` export retains its TypeScript source for Vitest's `import.meta.glob` transform, matching the Workpool test helper. Component source and installation documentation are included in the archive.
+
+Run `pnpm --filter @fantastic-dev/convex-tinybird check:pack` to check npm's dry-run file list, reject unexpected files and host references, and resolve runtime exports from an extracted tarball. This maintainer gate requires Node, pnpm, npm, `tar` and a symlink-capable filesystem; run it on macOS or Linux, matching CI. It also runs in the repository's `check:scripts`. `npm pack` builds through `prepack`; this package remains private until its separately verified release. Test suites, fixtures, example apps and environment files are excluded.
+
+The package is licensed under Apache-2.0. See [LICENSE](LICENSE) and [CHANGELOG.md](CHANGELOG.md).

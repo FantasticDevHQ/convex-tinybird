@@ -1,9 +1,9 @@
 import { ConvexError, v } from "convex/values";
 
-import { canonicalJson, payloadFingerprint, utf8Length } from "./canonical";
-import { env, mutation, query } from "./_generated/server";
-import { signReadToken } from "./jwt";
-import { resolveDestination } from "./destination";
+import { canonicalJson, payloadFingerprint, utf8Length } from "./canonical.js";
+import { env, mutation, query } from "./_generated/server.js";
+import { signReadToken } from "./jwt.js";
+import { resolveDestination } from "./destination.js";
 import {
   boundedCount,
   sweepExpired,
@@ -14,7 +14,7 @@ import {
   requeueDeadLetter,
   resolveExistingIdentity,
   scheduleDelivery,
-} from "./state";
+} from "./state.js";
 import {
   DEFAULT_REPLAY_LIMIT,
   MAX_REPLAY_LIMIT,
@@ -33,7 +33,7 @@ import {
   vEventStatus,
   vHealth,
   vHeartbeat,
-} from "./contract";
+} from "./contract.js";
 import {
   DEFAULT_CLEANUP_LIMIT,
   DEFAULT_DELIVERED_RETENTION_MS,
@@ -41,7 +41,7 @@ import {
   DEFAULT_ORPHAN_SCAN_LIMIT,
   MAX_ORPHAN_SCAN_LIMIT,
   SWEEP_READ_BUDGET_BYTES,
-} from "./budget";
+} from "./budget.js";
 
 /** The cheap operator signals. See {@link readHeartbeat}. */
 export const heartbeat = query({

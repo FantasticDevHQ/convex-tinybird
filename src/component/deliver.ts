@@ -1,13 +1,13 @@
 import { v } from "convex/values";
 
-import { classifyResponse } from "./classify";
-import { readAppendToken } from "./credentials";
-import { eventsUrl, resolveDestination } from "./destination";
-import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import { type ActionCtx, env, internalAction } from "./_generated/server";
-import { DEFAULT_REQUEST_TIMEOUT_MS } from "./contract";
-import { sanitizeMessage } from "./sanitize";
+import { classifyResponse } from "./classify.js";
+import { readAppendToken } from "./credentials.js";
+import { eventsUrl, resolveDestination } from "./destination.js";
+import { internal } from "./_generated/api.js";
+import type { Id } from "./_generated/dataModel.js";
+import { type ActionCtx, env, internalAction } from "./_generated/server.js";
+import { DEFAULT_REQUEST_TIMEOUT_MS } from "./contract.js";
+import { sanitizeMessage } from "./sanitize.js";
 
 /**
  * Deliver one event to Tinybird.

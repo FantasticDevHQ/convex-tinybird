@@ -1,11 +1,11 @@
 import { ConvexError, v } from "convex/values";
 
-import { mutation } from "./_generated/server";
-import { DEFAULT_STUCK_AFTER_MS, DEFAULT_STUCK_LIMIT } from "./budget";
-import { boundedBatch } from "./contract";
-import { type WorkId, pool } from "./pool";
-import { patchSettings, pushHistory, recordActor, scheduleDelivery } from "./state";
-import type { Doc } from "./_generated/dataModel";
+import { mutation } from "./_generated/server.js";
+import { DEFAULT_STUCK_AFTER_MS, DEFAULT_STUCK_LIMIT } from "./budget.js";
+import { boundedBatch } from "./contract.js";
+import { type WorkId, pool } from "./pool.js";
+import { patchSettings, pushHistory, recordActor, scheduleDelivery } from "./state.js";
+import type { Doc } from "./_generated/dataModel.js";
 
 /**
  * Where a scan stopped.
@@ -16,7 +16,7 @@ import type { Doc } from "./_generated/dataModel";
  * total order over the range being walked.
  */
 type ScanCursor = { updatedAt: number; creationTime: number };
-import type { MutationCtx } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server.js";
 
 /**
  * Recovering work that stopped moving.

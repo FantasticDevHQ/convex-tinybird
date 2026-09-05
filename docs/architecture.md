@@ -420,7 +420,7 @@ guarantee here and being explicit about where it comes from.
 
 ## Boundary and the standalone package path
 
-`scripts/check-boundary.mjs` rejects any `@fantastic-dev/*`, `packages/backend`, Better Auth or
+`scripts/check-boundary.mjs` rejects any host workspace import, `packages/backend`, Better Auth or
 package-escaping import under `src/` and any runtime dependency outside `convex` and
 `@convex-dev/workpool`. The package is built inside the Fantastic.dev monorepo as a workspace
 package and is meant to move to its own repository and npm once the first consumer is verified;

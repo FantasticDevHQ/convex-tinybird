@@ -1,4 +1,4 @@
-import { env } from "./_generated/server";
+import { env } from "./_generated/server.js";
 
 /**
  * The single place the append token is read.
