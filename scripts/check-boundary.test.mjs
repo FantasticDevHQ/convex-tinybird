@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 
@@ -9,6 +10,42 @@ import { checkBoundary, scanRootsFor } from "./check-boundary.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => join(here, "fixtures", name);
 const packageRoot = join(here, "..");
+
+for (const source of [
+  'import { x } from "../component/lib";',
+  'export { x } from "../client/index";',
+  'import x from "convex";',
+  'import x from "@tinybirdco/sdk";',
+  "const x = process.env.TINYBIRD_ADMIN_TOKEN;",
+  "const x = import.meta.env.TINYBIRD_TOKEN;",
+  'const x = require("../component/lib");',
+  "const x = import(moduleName);",
+]) {
+  test(`browser boundary rejects ${source}`, () => {
+    const dir = mkdtempSync(join(tmpdir(), "tinybird-browser-boundary-"));
+    try {
+      mkdirSync(join(dir, "src/browser"), { recursive: true });
+      writeFileSync(join(dir, "package.json"), "{}");
+      writeFileSync(join(dir, "src/browser/index.ts"), source);
+      assert.ok(checkBoundary(dir).some((failure) => failure.includes("browser")));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("browser modules may import only within their directory", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tinybird-browser-boundary-"));
+  try {
+    mkdirSync(join(dir, "src/browser"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), "{}");
+    writeFileSync(join(dir, "src/browser/index.ts"), 'export { x } from "./helpers";');
+    writeFileSync(join(dir, "src/browser/helpers.ts"), "export const x = 1;");
+    assert.deepEqual(checkBoundary(dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("a clean package passes", () => {
   assert.deepEqual(checkBoundary(fixture("clean")), []);

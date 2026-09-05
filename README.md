@@ -118,6 +118,24 @@ Update each affected deployment and re-push its mount configuration after rotati
 clients must never receive append, deployment, or admin credentials. See the
 [Tinybird JWT contract](https://www.tinybird.co/docs/forward/core-concepts/jwt).
 
+Import `queryPipe` from `@fantastic-dev/convex-tinybird/browser` in browser code. This separate
+entry imports neither the component client nor the Tinybird SDK. Pass the token issuer's
+`host` and `token`, the allowed `pipe` name, typed query `params`, and an optional abort
+`signal`. It returns `{ data, meta, rows }`. Values in `params` are strings, numbers, or
+booleans, encoded as URL parameters; the JWT goes only in the authorization header. Requests
+omit cookies and browser caching and refuse redirects.
+
+`TinybirdQueryError.code` distinguishes `token_expired_or_invalid` for HTTP 403,
+`rate_limited` for 429, `bad_request` for other 4xx responses or invalid request destinations,
+and `unavailable` for 5xx, network errors, or malformed responses. Cancellation preserves the
+caller's abort reason. Provider response bodies and network error details are not exposed.
+
+Each host owns its token lifecycle. Share one in-memory token and pending mint per authorized
+viewer and tenant/project scope. Refresh 60 seconds before expiry. On 403, refresh and retry the
+request once; a second 403 or an authorization refusal must surface as forbidden. Abort old
+requests and discard cached tokens and results when the scope or viewer changes. The package
+does not install React hooks or an authentication provider in another app.
+
 ## Enqueue from a host mutation
 
 Inside the example's [`place` mutation](./example/convex/orders.ts), the domain write and enqueue

@@ -287,6 +287,24 @@ export function checkBoundary(packageRoot) {
       const path = join(dir, file);
       const text = readFileSync(path, "utf8");
       const { code, unterminated } = codeOnly(text);
+      const browserRoot = join(root, "src", "browser");
+      const browserFile = path.startsWith(`${browserRoot}${sep}`);
+      if (browserFile) {
+        if (
+          /\bprocess\b|\bimport\s*\.\s*meta\s*\.\s*env\b|\brequire\s*\(|\bimport\s*\(/u.test(code)
+        ) {
+          failures.push(
+            `${label}/${file}: browser code cannot read environment variables or load modules dynamically`,
+          );
+        }
+        for (const specifier of specifiersIn(text)) {
+          if (!specifier.startsWith(".") || escapesPackage(specifier, dirname(path), browserRoot)) {
+            failures.push(
+              `${label}/${file}: browser import "${specifier}" must stay within src/browser`,
+            );
+          }
+        }
+      }
       // Only where the scanner's output is actually CONSUMED. A root with no source patterns
       // never looks at `code`, so refusing to read the file protects nothing there — it just
       // rejects legal host-app code (`const RE = /["]/gu;`) and tells the author to restructure a

@@ -146,6 +146,15 @@ Keep the returned JWT in browser memory. Never ship append, deployment, or admin
 browser, and never store them in public frontend environment variables. Signing-token rotation
 affects every JWT signed by that workspace token; update all mounts using it and re-push.
 
+Use the package's `./browser` entry for endpoint requests. Your app must supply a token issuer
+with its own authorization rules and an in-memory refresh mechanism. Share pending token mints
+between charts with the same viewer and tenant/project scope. Refresh a minute before expiry,
+retry an endpoint 403 only once with a refreshed token, and clear tokens and results on sign-out
+or scope changes. Pass an `AbortSignal` to `queryPipe` when replacing or unmounting a request.
+Do not import the server client or infrastructure SDK into frontend code. The package boundary
+check enforces this separation for its browser entry; keep an equivalent check in your app's
+frontend build.
+
 ## Verify before enabling producers
 
 Deploy the Tinybird schema before enabling live event emission. For each mount:
