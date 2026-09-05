@@ -39,8 +39,10 @@ import type { DataModel } from "./dataModel.js";
 type Env = {
   readonly CONVEX_CLOUD_URL: string;
   readonly CONVEX_SITE_URL: string;
+  readonly TINYBIRD_ADMIN_TOKEN: string | undefined;
   readonly TINYBIRD_HOST: string | undefined;
   readonly TINYBIRD_TOKEN: string | undefined;
+  readonly TINYBIRD_WORKSPACE_ID: string | undefined;
 };
 
 /**

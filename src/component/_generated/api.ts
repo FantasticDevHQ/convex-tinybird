@@ -15,6 +15,7 @@ import type * as contract from "../contract.js";
 import type * as credentials from "../credentials.js";
 import type * as deliver from "../deliver.js";
 import type * as destination from "../destination.js";
+import type * as jwt from "../jwt.js";
 import type * as lib from "../lib.js";
 import type * as lifecycle from "../lifecycle.js";
 import type * as pool from "../pool.js";
@@ -37,6 +38,7 @@ const fullApi: ApiFromModules<{
   credentials: typeof credentials;
   deliver: typeof deliver;
   destination: typeof destination;
+  jwt: typeof jwt;
   lib: typeof lib;
   lifecycle: typeof lifecycle;
   pool: typeof pool;

@@ -77,13 +77,14 @@ Each maps its chosen host variables into the same component contract, `TINYBIRD_
 
 ## Configure the consuming Convex deployment
 
-| Credential or setting                            | Store                                                 | Purpose                                    |
-| ------------------------------------------------ | ----------------------------------------------------- | ------------------------------------------ |
-| Datasource append token                          | Each target Convex deployment, mapped into each mount | Runtime event delivery                     |
-| Regional API origin                              | Same Convex deployment, mapped to `TINYBIRD_HOST`     | Runtime destination                        |
-| Workspace deployment token                       | App's CI environment secrets                          | Deploy datasource and endpoint definitions |
-| Deployment API origin                            | App's CI environment configuration                    | Target the correct region                  |
-| Endpoint read or JWT signing credential, if used | Authorized host server's secret store                 | Host-owned analytics reads                 |
+| Credential or setting                            | Store                                                      | Purpose                                    |
+| ------------------------------------------------ | ---------------------------------------------------------- | ------------------------------------------ |
+| Datasource append token                          | Each target Convex deployment, mapped into each mount      | Runtime event delivery                     |
+| Regional API origin                              | Same Convex deployment, mapped to `TINYBIRD_HOST`          | Runtime destination                        |
+| Workspace deployment token                       | App's CI environment secrets                               | Deploy datasource and endpoint definitions |
+| Deployment API origin                            | App's CI environment configuration                         | Target the correct region                  |
+| Workspace admin signing token, if reads are used | Target Convex deployment, mapped to `TINYBIRD_ADMIN_TOKEN` | Sign short-lived browser JWTs              |
+| Workspace ID, if reads are used                  | Same deployment, mapped to `TINYBIRD_WORKSPACE_ID`         | Bind JWTs to the intended workspace        |
 
 GitHub environment secrets do not configure Convex, and logging into `tb` does not configure
 either store. Set the variables on the Convex deployment that runs the consuming app. Shell
@@ -109,9 +110,41 @@ a local Convex backend that can reach its loopback address. A hosted Convex depl
 reach Tinybird Local on your laptop via `127.0.0.1`. Its credentials are disposable local values,
 not the cloud tokens.
 
-Read access is a separate host concern in the current package. Authorize users and tenants in
-the consuming app before issuing scoped reads. The generic endpoint is not a tenant isolation
-template. Never ship append, deployment, or admin tokens to the browser.
+## Configure browser reads
+
+Repeat this for every app and environment that needs browser analytics. Retrieve the intended
+workspace's admin signing token and workspace ID from Tinybird. An append or CI deployment token
+cannot substitute for the signing secret. Keep the secret in that app's Convex deployment.
+Extend its `productEvents` mount mapping:
+
+```ts
+app.use(tinybird, {
+  name: "productEvents",
+  env: {
+    TINYBIRD_TOKEN: process.env.PRODUCT_TINYBIRD_TOKEN,
+    TINYBIRD_HOST: process.env.PRODUCT_TINYBIRD_HOST,
+    TINYBIRD_ADMIN_TOKEN: process.env.PRODUCT_TINYBIRD_ADMIN_TOKEN,
+    TINYBIRD_WORKSPACE_ID: process.env.PRODUCT_TINYBIRD_WORKSPACE_ID,
+  },
+});
+```
+
+Using securely supplied values, set `PRODUCT_TINYBIRD_ADMIN_TOKEN` and
+`PRODUCT_TINYBIRD_WORKSPACE_ID` with `convex env set`, then re-push the app configuration as
+above. Repeat with the audit mount's own variables if it also supports reads. A shared workspace
+means a shared signing authority; separate Convex mounts do not change that authority.
+
+Create an app-owned public mutation that authorizes the viewer and requested tenant/project,
+then calls `productEvents.mintReadToken`. The host chooses the allowed pipes, fixed parameter
+values, lifetime, and rate limit. Use the [read-token API contract](../README.md#reading-from-the-browser).
+The generic endpoint is not a tenant isolation template; adapt and test its tenant filter before
+allowing browser access.
+
+Check `health.readTokensConfigured`, then verify an actual endpoint request with the minted JWT.
+Test a denied viewer, a foreign tenant, an attempted override of the fixed parameters, and expiry.
+Keep the returned JWT in browser memory. Never ship append, deployment, or admin tokens to the
+browser, and never store them in public frontend environment variables. Signing-token rotation
+affects every JWT signed by that workspace token; update all mounts using it and re-push.
 
 ## Verify before enabling producers
 

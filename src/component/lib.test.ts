@@ -7,6 +7,107 @@ import { payloadOf } from "../testing/fixtures";
 
 const modules = import.meta.glob("./**/*.ts");
 
+describe("mintReadToken", () => {
+  const args = {
+    name: "reader",
+    ttlSeconds: 900,
+    scopes: [{ pipe: "summary", fixedParams: { resource_id: "tenant", project_id: "" } }],
+    rps: 10,
+  };
+  beforeEach(() => {
+    vi.stubEnv("TINYBIRD_ADMIN_TOKEN", "synthetic-admin-secret");
+    vi.stubEnv("TINYBIRD_WORKSPACE_ID", "test-workspace");
+    vi.stubEnv("TINYBIRD_TOKEN", "");
+    vi.stubEnv("TINYBIRD_HOST", "https://api.us-east.tinybird.co");
+    vi.useFakeTimers();
+    vi.setSystemTime(1800000000123);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
+
+  it("mints a fresh expiry in seconds without returning the signing secret", async () => {
+    const t = convexTest(schema, modules);
+    const result = await t.mutation(api.lib.mintReadToken, args);
+    expect(result).toEqual({
+      token: result.token,
+      expiresAt: 1800000900,
+      host: "https://api.us-east.tinybird.co",
+    });
+    expect(JSON.stringify(result)).not.toContain("synthetic-admin-secret");
+    expect(
+      JSON.parse(Buffer.from(result.token.split(".")[1], "base64url").toString()),
+    ).toMatchObject({ workspace_id: "test-workspace", exp: result.expiresAt, limits: { rps: 10 } });
+    vi.advanceTimersByTime(60000);
+    expect((await t.mutation(api.lib.mintReadToken, args)).expiresAt).toBe(1800000960);
+    expect(await t.query(api.lib.health, {})).toMatchObject({
+      configured: false,
+      readTokensConfigured: true,
+    });
+  });
+
+  it.each(["TINYBIRD_ADMIN_TOKEN", "TINYBIRD_WORKSPACE_ID"])(
+    "fails closed when %s is blank",
+    async (key) => {
+      vi.stubEnv(key, "  ");
+      const t = convexTest(schema, modules);
+      expect(await codeOf(t.mutation(api.lib.mintReadToken, args))).toBe(
+        "read_tokens_not_configured",
+      );
+      expect((await t.query(api.lib.health, {})).readTokensConfigured).toBe(false);
+    },
+  );
+
+  it.each([59, 3601, 60.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects TTL %s",
+    async (ttlSeconds) => {
+      expect(
+        await codeOf(
+          convexTest(schema, modules).mutation(api.lib.mintReadToken, { ...args, ttlSeconds }),
+        ),
+      ).toBe("invalid_read_token");
+    },
+  );
+  it.each([60, 3600])("accepts TTL boundary %s", async (ttlSeconds) => {
+    expect(
+      (await convexTest(schema, modules).mutation(api.lib.mintReadToken, { ...args, ttlSeconds }))
+        .expiresAt,
+    ).toBe(1800000000 + ttlSeconds);
+  });
+  it.each([0, 11])("rejects %s scopes", async (count) => {
+    expect(
+      await codeOf(
+        convexTest(schema, modules).mutation(api.lib.mintReadToken, {
+          ...args,
+          scopes: Array.from({ length: count }, () => args.scopes[0]),
+        }),
+      ),
+    ).toBe("invalid_read_token");
+  });
+  it("accepts ten scopes", async () => {
+    await expect(
+      convexTest(schema, modules).mutation(api.lib.mintReadToken, {
+        ...args,
+        scopes: Array.from({ length: 10 }, () => args.scopes[0]),
+      }),
+    ).resolves.toHaveProperty("token");
+  });
+  it("rejects non-string fixed params", async () => {
+    await expect(
+      convexTest(schema, modules).mutation(api.lib.mintReadToken, {
+        ...args,
+        scopes: [{ pipe: "summary", fixedParams: { resource_id: 42 } }],
+      } as never),
+    ).rejects.toThrow();
+  });
+  it.each([0, -1, 1.5, Number.NaN])("rejects invalid RPS %s", async (rps) => {
+    expect(
+      await codeOf(convexTest(schema, modules).mutation(api.lib.mintReadToken, { ...args, rps })),
+    ).toBe("invalid_read_token");
+  });
+});
+
 describe("health", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -22,6 +123,7 @@ describe("health", () => {
     // Strict equality on purpose: this is the whole operator-visible surface, so an extra
     // field appearing here is something leaking into it.
     expect(health).toEqual({
+      readTokensConfigured: false,
       configured: false,
       paused: false,
       counts: {

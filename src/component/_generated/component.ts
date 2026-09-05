@@ -154,6 +154,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           oldestPendingAgeMs: number | null;
           paused: boolean;
           pausedReason?: "unauthorized" | "invalid_host" | "operator";
+          readTokensConfigured: boolean;
         },
         Name
       >;
@@ -199,6 +200,18 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           paused: boolean;
           pausedReason?: "unauthorized" | "invalid_host" | "operator";
         },
+        Name
+      >;
+      mintReadToken: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          name: string;
+          rps?: number;
+          scopes: Array<{ fixedParams: Record<string, string>; pipe: string }>;
+          ttlSeconds: number;
+        },
+        { expiresAt: number; host: string; token: string },
         Name
       >;
       pause: FunctionReference<

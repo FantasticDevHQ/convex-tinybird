@@ -7,6 +7,15 @@
 import type { GenericDataModel, GenericMutationCtx, GenericQueryCtx } from "convex/server";
 
 import type { ComponentApi } from "../component/_generated/component";
+import type { ReadTokenScope } from "../component/jwt";
+
+export type MintReadTokenArgs = {
+  name: string;
+  ttlSeconds: number;
+  scopes: ReadTokenScope[];
+  rps?: number;
+};
+export type MintReadTokenResult = { token: string; expiresAt: number; host: string };
 
 /**
  * Where the last `requeueStuck` call stopped. Opaque — pass back exactly what you were given.
@@ -86,6 +95,10 @@ export type RunMutationCtx = { runMutation: GenericMutationCtx<GenericDataModel>
 export type TinybirdComponent = ComponentApi;
 
 export class TinybirdDelivery {
+  /** Authorize the viewer and derive scopes in the host before calling this method. */
+  async mintReadToken(ctx: RunMutationCtx, args: MintReadTokenArgs): Promise<MintReadTokenResult> {
+    return ctx.runMutation(this.component.lib.mintReadToken, args);
+  }
   readonly options: ResolvedTinybirdDeliveryOptions;
 
   /**

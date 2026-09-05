@@ -14,9 +14,9 @@ import { v } from "convex/values";
  *     },
  *   });
  *
- * Component code reads them only through the generated `env` export. Both are optional
- * on purpose: without a token the component is *unconfigured* — enqueue still stores
- * events, nothing is scheduled and no request leaves the deployment.
+ * Component code reads them only through the generated `env` export. Without an append
+ * token enqueue still stores events, but schedules no delivery. Optional read-signing
+ * configuration is independent of the append path.
  */
 const component = defineComponent("tinybird", {
   env: {
@@ -24,6 +24,10 @@ const component = defineComponent("tinybird", {
     TINYBIRD_TOKEN: v.optional(v.string()),
     /** API base URL, e.g. `https://api.tinybird.co`. Absent → the default host. */
     TINYBIRD_HOST: v.optional(v.string()),
+    /** Workspace admin token used only to sign short-lived read JWTs. */
+    TINYBIRD_ADMIN_TOKEN: v.optional(v.string()),
+    /** Workspace whose endpoints accept those JWTs. */
+    TINYBIRD_WORKSPACE_ID: v.optional(v.string()),
   },
 });
 

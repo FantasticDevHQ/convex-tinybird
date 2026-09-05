@@ -67,13 +67,15 @@ names stable when updating the host. The example tests prove that both mounts ac
 ## Environment
 
 The host supplies the component's declared variables through each mount's `env` mapping.
-Component code reads the generated `env` export. Credentials are not stored in component tables,
-returned by public functions, or logged.
+Component code reads the generated `env` export. Static credentials are not stored in component
+tables, returned by functions, or logged. Only the scoped, short-lived read JWT is returned.
 
-| Variable         | Use                                      | When absent                                  |
-| ---------------- | ---------------------------------------- | -------------------------------------------- |
-| `TINYBIRD_TOKEN` | Server-side datasource append credential | Enqueue stores events, but delivery is inert |
-| `TINYBIRD_HOST`  | Regional API origin                      | Uses the component's default Tinybird origin |
+| Variable                | Use                                         | When absent                                  |
+| ----------------------- | ------------------------------------------- | -------------------------------------------- |
+| `TINYBIRD_TOKEN`        | Server-side datasource append credential    | Enqueue stores events, but delivery is inert |
+| `TINYBIRD_HOST`         | Regional API origin                         | Uses the component's default Tinybird origin |
+| `TINYBIRD_ADMIN_TOKEN`  | Workspace admin signing secret, server only | Read-token minting fails closed              |
+| `TINYBIRD_WORKSPACE_ID` | ID of the workspace accepting read JWTs     | Read-token minting fails closed              |
 
 Use a token scoped to `DATASOURCE:APPEND` for the intended datasource. A regional origin such as
 `https://api.eu-central-1.aws.tinybird.co` selects that Tinybird region;
@@ -82,6 +84,39 @@ Use a token scoped to `DATASOURCE:APPEND` for the intended datasource. A regiona
 Use a bare HTTPS origin without a path, query, fragment, or embedded credentials. Loopback HTTP
 is supported for Tinybird Local. Invalid destinations and authentication failures pause the
 mount and appear in its health result.
+
+## Reading from the browser
+
+Each consuming app supplies its own workspace ID and signing secret through the mount's
+`env` mapping. See [per-app setup](./docs/installing-in-another-app.md#configure-browser-reads).
+Append and read configuration are independent: `health.configured` still checks the append
+token, while `health.readTokensConfigured` checks the signing secret and workspace ID. Neither
+proves that the remote credentials work.
+
+In an authorized host mutation, call `delivery.mintReadToken(ctx, args)` with a `name`, an
+integer `ttlSeconds` from 60 to 3600, and 1 to 10 scopes shaped as
+`{ pipe, fixedParams: Record<string, string> }`. Optional `rps` must be a positive safe integer.
+The result is `{ token, expiresAt, host }`; `expiresAt` is a Unix timestamp in **seconds**.
+Missing signing configuration throws `read_tokens_not_configured`; invalid limits or fixed
+parameter values throw `invalid_read_token` or a Convex argument-validation error.
+
+The host must authenticate the viewer and derive allowed pipe names and tenant/project values
+from authorized records. Never expose this component method through a pass-through public
+mutation that accepts browser-provided scopes. Fixed parameter names must exactly match the
+pipe's typed parameters, and every source in its SQL must apply the tenant filter. A signed
+parameter alone does not filter rows. An empty project value may mean team-wide access only
+if the host and endpoint explicitly share that contract.
+
+The browser sends the returned JWT in `Authorization: Bearer <token>` to the allowed endpoint
+on `host`. Keep it in memory and request a fresh token through the authorized mutation before
+expiry. Minting is a mutation, never a cached query. The signer uses Web Crypto HMAC SHA-256
+without a JWT runtime dependency; signing is verified in a real local Convex mutation.
+
+JWTs remain usable until expiry even if app membership changes. They cannot be revoked
+individually; rotating the workspace admin signing token invalidates tokens signed with it.
+Update each affected deployment and re-push its mount configuration after rotation. Browser
+clients must never receive append, deployment, or admin credentials. See the
+[Tinybird JWT contract](https://www.tinybird.co/docs/forward/core-concepts/jwt).
 
 ## Enqueue from a host mutation
 

@@ -277,7 +277,7 @@ test("still catches a client-qualified call that names nothing at all", () => {
   }
 });
 
-test("the parsed client surface is exactly the 11 async methods", () => {
+test("the parsed client surface is exactly the 12 async methods", () => {
   // `clientMethods` slices from the class declaration to EOF, which is only correct while the
   // class is last in the file. A widened surface fails OPEN — check 1 stops rejecting names it
   // should reject — and that is invisible from the outside, because the gate still passes. This
@@ -292,6 +292,7 @@ test("the parsed client surface is exactly the 11 async methods", () => {
       "enqueue",
       "health",
       "heartbeat",
+      "mintReadToken",
       "pause",
       "reclaimOrphanedPayloads",
       "replayEvent",

@@ -336,6 +336,8 @@ export const vHeartbeat = v.object({
 export type Heartbeat = Infer<typeof vHeartbeat>;
 
 export const vHealth = v.object({
+  /** Signing secret and workspace ID present, independently of append configuration. */
+  readTokensConfigured: v.boolean(),
   /** Append token present and non-blank. */
   configured: v.boolean(),
   paused: v.boolean(),

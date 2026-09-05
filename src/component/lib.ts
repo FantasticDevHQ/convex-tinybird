@@ -1,7 +1,9 @@
 import { ConvexError, v } from "convex/values";
 
 import { canonicalJson, payloadFingerprint, utf8Length } from "./canonical";
-import { mutation, query } from "./_generated/server";
+import { env, mutation, query } from "./_generated/server";
+import { signReadToken } from "./jwt";
+import { resolveDestination } from "./destination";
 import {
   boundedCount,
   sweepExpired,
@@ -60,7 +62,50 @@ export const health = query({
       boundedCount(ctx, "delivering"),
       boundedCount(ctx, "failed"),
     ]);
-    return { ...heartbeatFields, counts: { pending, delivering, failed } };
+    return {
+      ...heartbeatFields,
+      readTokensConfigured: readTokensConfigured(),
+      counts: { pending, delivering, failed },
+    };
+  },
+});
+
+function readTokensConfigured(): boolean {
+  return Boolean(env.TINYBIRD_ADMIN_TOKEN?.trim() && env.TINYBIRD_WORKSPACE_ID?.trim());
+}
+
+/** Host-only minting entry point. The host must authorize every scope and fixed parameter. */
+export const mintReadToken = mutation({
+  args: {
+    name: v.string(),
+    ttlSeconds: v.number(),
+    scopes: v.array(v.object({ pipe: v.string(), fixedParams: v.record(v.string(), v.string()) })),
+    rps: v.optional(v.number()),
+  },
+  returns: v.object({ token: v.string(), expiresAt: v.number(), host: v.string() }),
+  handler: async (_ctx, args) => {
+    if (
+      !Number.isInteger(args.ttlSeconds) ||
+      args.ttlSeconds < 60 ||
+      args.ttlSeconds > 3600 ||
+      args.scopes.length < 1 ||
+      args.scopes.length > 10 ||
+      args.scopes.some((scope) =>
+        Object.values(scope.fixedParams).some((value) => typeof value !== "string"),
+      ) ||
+      (args.rps !== undefined && (!Number.isSafeInteger(args.rps) || args.rps < 1))
+    )
+      throw new ConvexError({ code: "invalid_read_token" });
+    const secret = env.TINYBIRD_ADMIN_TOKEN;
+    const workspaceId = env.TINYBIRD_WORKSPACE_ID;
+    if (!secret?.trim() || !workspaceId?.trim()) {
+      throw new ConvexError({ code: "read_tokens_not_configured" });
+    }
+    const destination = resolveDestination(env.TINYBIRD_HOST);
+    if (!destination.ok) throw new ConvexError({ code: "invalid_destination" });
+    const expiresAt = Math.floor(Date.now() / 1000) + args.ttlSeconds;
+    const token = await signReadToken({ ...args, secret, workspaceId, expiresAt });
+    return { token, expiresAt, host: destination.host };
   },
 });
 
