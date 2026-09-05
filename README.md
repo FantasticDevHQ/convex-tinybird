@@ -22,21 +22,18 @@ until a test stubs it), so there is nothing to authenticate against.
 
 Three things it will fail on, each verified by deliberately breaking it:
 
-| Break                                                 | What fails                                          |
-| ----------------------------------------------------- | --------------------------------------------------- |
-| A module or public function missing from `_generated` | `check-codegen-fresh.mjs`                           |
-| An import outside `convex` and this component         | `check-boundary.mjs`, in `src` and `example/convex` |
-| A test that calls `fetch` without stubbing it         | the suite, on `network disabled in tests`           |
+| Break                                               | What fails                                          |
+| --------------------------------------------------- | --------------------------------------------------- |
+| Any difference in component or example `_generated` | `check-codegen-fresh.mjs`                           |
+| An import outside `convex` and this component       | `check-boundary.mjs`, in `src` and `example/convex` |
+| A test that calls `fetch` without stubbing it       | the suite, on `network disabled in tests`           |
 
-Codegen freshness compares the module and public-function SET rather than regenerating, because
-a component's `_generated` is written by pushing a host that mounts it and CI has no deployment.
-
-Signature drift is only **partly** covered, and it is worth knowing which part. `tsc` catches
-_narrowing_ changes — a new required argument, or a type that changes shape — because the client
-consumes the generated component types. It does **not** catch _widening_: a new optional
-argument, or a return union gaining a literal, leaves the generated file stale with nothing
-complaining. Regeneration is the only complete answer, and it is part of the local `check`
-command above rather than of CI.
+Codegen freshness runs `CONVEX_AGENT_MODE=anonymous convex dev --once` in a temporary copy
+of the example, then compares every generated file in the component and example. It detects
+changed validators, missing files, and obsolete output without rewriting your checkout or using
+your deployment credentials. Convex may download its local backend binary on the first run;
+the delivery test suites themselves use stubbed HTTP transport. No Tinybird credentials are needed.
+The temporary local deployment is removed when the check finishes.
 
 ## Status
 

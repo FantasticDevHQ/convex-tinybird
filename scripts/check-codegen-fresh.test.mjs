@@ -5,7 +5,8 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { checkCodegenFresh } from "./check-codegen-fresh.mjs";
+import { checkCodegenInventory as checkCodegenFresh } from "./check-codegen-inventory.mjs";
+import { checkCodegenFresh as regenerateAndCheck, copyForCodegen } from "./check-codegen-fresh.mjs";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -19,7 +20,13 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 function copyPackage() {
   const dir = mkdtempSync(join(tmpdir(), "codegen-fresh-"));
   for (const entry of ["src", "example", "scripts", "package.json"]) {
-    cpSync(join(packageRoot, entry), join(dir, entry), { recursive: true });
+    cpSync(join(packageRoot, entry), join(dir, entry), {
+      recursive: true,
+      filter: (source) =>
+        !source
+          .split("/")
+          .some((part) => part === "node_modules" || part === ".convex" || part.startsWith(".env")),
+    });
   }
   return dir;
 }
@@ -154,6 +161,47 @@ test("an ordinary new module IS still demanded, so the omissions are not a blank
     const failures = checkCodegenFresh(dir);
     assert.equal(failures.length, 1);
     assert.match(failures[0], /"refunds" exists in source and is not declared/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("regeneration detects validator drift and changed, missing, or extra generated files", () => {
+  const dir = copyForCodegen(packageRoot);
+  try {
+    assert.deepEqual(regenerateAndCheck(dir), []);
+    const api = join(dir, "src/component/_generated/component.ts");
+    const original = readFileSync(api, "utf8");
+    const changed = original.replace("datasource: string", "datasource: number");
+    assert.notEqual(changed, original);
+    writeFileSync(api, changed);
+    rmSync(join(dir, "example/convex/_generated/api.js"));
+    writeFileSync(join(dir, "example/convex/_generated/obsolete.ts"), "export {};\n");
+    const failures = regenerateAndCheck(dir);
+    assert.equal(failures.length, 3, failures.join("\n"));
+    assert.ok(failures.some((failure) => failure.includes("component.ts")));
+    assert.ok(failures.some((failure) => failure.includes("api.js")));
+    assert.ok(failures.some((failure) => failure.includes("obsolete.ts")));
+    assert.equal(readFileSync(api, "utf8"), changed, "the check must not rewrite committed files");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("regeneration detects an optional argument and a widened return union in source", () => {
+  const dir = copyForCodegen(packageRoot);
+  try {
+    const contract = join(dir, "src/component/contract.ts");
+    const original = readFileSync(contract, "utf8");
+    const changed = original
+      .replace(
+        "export const vEnqueueArgs = v.object({",
+        "export const vEnqueueArgs = v.object({ extra: v.optional(v.string()),",
+      )
+      .replace('v.literal("repaired")),', 'v.literal("repaired"), v.literal("future_outcome")),');
+    assert.notEqual(changed, original);
+    writeFileSync(contract, changed);
+    assert.ok(regenerateAndCheck(dir).some((failure) => failure.includes("component.ts")));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
