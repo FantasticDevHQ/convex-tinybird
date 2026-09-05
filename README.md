@@ -280,6 +280,13 @@ The wrapper imports `vFailureCategory` from `@fantastic-dev/convex-tinybird`. Pa
 rows before applying the batch limit. `remaining` describes that category; omit the argument to
 replay all dead letters. Both paths order by last update so repeated failures go to the back.
 
+Replay defaults to **50 events** and accepts at most **100**, matching resume's 100-event
+operator work ceiling. The smaller default leaves room for replay's extra attempt and error-history
+updates. These are per-transaction work bounds, independent of payload size, rather than Convex's
+hard document limits. Active delivery can still cause transaction conflicts: retry a failed operator
+call with backoff or request a smaller `limit`. See [the measurements](docs/architecture.md#replay)
+for the sizing rationale.
+
 For an existing mount upgraded from a version without `lastErrorCategory`, backfill before using
 filtered replay. Run this from the host's backend directory, replacing `productEvents` with the
 mount name. It processes at most 100 rows per call without replaying events:

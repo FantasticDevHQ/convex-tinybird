@@ -36,29 +36,22 @@ export const DATASOURCE_NAME_PATTERN = new RegExp(
   "u",
 );
 /**
- * How many dead letters one `replayFailed` call returns to the queue by default.
- *
- * Sized from bytes when the payload still lived on the event row, where a batch of `n` cost
- * `3n + 1` passes over rows of `payload + ~2 KB` and 100 rows came to roughly 19 MiB against
- * Convex's ~8 MiB per-call limit. FTD-2525 moved the payload to its own table, so a row is
- * now independent of the event's size, and the same batch of 30 costs well under a megabyte
- * rather than the 5.9 MiB it did — about 490 KB at the row's documented worst case.
- *
- * These values are therefore CONSERVATIVE rather than binding, and deliberately unchanged
- * by that move: raising them is a behaviour change that deserves its own tests rather than
- * a side effect of a storage change. What now binds first is Convex's document-scan limit,
- * not bytes. See FTD-2529.
+ * Replay defaults to 50 events, half the 100-event operator work ceiling.
+ * Replay additionally resets attempts and updates error history before scheduling each item;
+ * the smaller default reduces transaction work and exposure to Workpool/settings conflicts.
+ * This is a work bound, not a payload-byte or document-scan limit: replay never reads payloads.
  */
-export const DEFAULT_REPLAY_LIMIT = 20;
+export const DEFAULT_REPLAY_LIMIT = 50;
 
 /**
- * The largest batch `replayFailed` will accept, however it is called.
- *
- * Separate from the default on purpose: a single clamp to the default would mean a host
- * could never ask for more than the conservative number chosen for everyone else, so the
- * safe default would silently become a ceiling.
+ * At most 100 Workpool enqueues per replay transaction, matching resume's work ceiling.
+ * A live configured 100-event probe used 705 document reads and 403 writes, far below Convex's
+ * hard limits. Larger batches can fit those limits but extend the transaction and its conflict
+ * window; even 100 can exhaust OCC retries under active delivery. No batch guarantees success
+ * under contention. Hosts may request fewer and retry a failed transaction with backoff.
+ * Keep this distinct from the default so operators can opt into the full work ceiling.
  */
-export const MAX_REPLAY_LIMIT = 30;
+export const MAX_REPLAY_LIMIT = 100;
 
 /**
  * Turns a caller-supplied batch size into one `.take()` will accept.

@@ -278,9 +278,30 @@ replaying or deleting anything. A filtered call encountering an unindexed failed
 `category_index_not_ready`; it does not claim there are no matching failures. Unfiltered
 replay remains available during the upgrade. The README gives the cursor loop.
 
-Replay reads and writes only `events` rows, never `payloads`, so its cost is the row count times
-independent of the payload. A host that raises `maxPayloadBytes` no longer has to lower `limit`:
+Replay updates event metadata, scoped settings and Workpool records, never `payloads`. Its work
+scales with event count, independently of payload size. A host that raises `maxPayloadBytes` no longer has to lower `limit`:
 payload size and batch size are now independent, which is the point of the split.
+
+Replay defaults to **50 events** and caps a transaction at **100 Workpool enqueues**, the same
+operator work ceiling as `resume`. The default is half that ceiling because replay also resets
+attempts and updates error history for each event. This is a practical transaction-work constraint,
+not a claim that a hard document or byte limit binds at 100.
+
+A configured anonymous Convex deployment measured 100 replays at 705 document reads, 403 writes,
+151 index-range reads and about 143 KB read with small metadata rows. A 200-event batch also
+completed within the database limits. Payloads were separate and were not read. The current
+[platform limits](https://docs.convex.dev/production/state/limits) are 32,000 documents scanned,
+16,000 written, 4,096 index ranges and 16 MiB read per transaction; none justifies the former
+20/30 values. The historical claim that document scanning now binds first was unproven.
+
+Contention is the practical concern: in a sequential 50/100/150/200/100/50 local probe with active
+Workpool workers, one 100-event call exhausted conflict retries while another succeeded; 150 and
+200 also succeeded after longer calls. A separate 200-event call failed on Workpool's workers table.
+These observations do not establish a deterministic cutoff or latency guarantee. Keeping the
+existing resume work ceiling avoids expanding one operator transaction beyond 100 enqueues, while
+50 is the smaller replay default. Hosts should back off and retry transaction conflicts, and may
+lower `limit` under load. The ceiling regression queues and delivers 100 events with separate
+64 KiB payloads, retaining error history and leaving a sentinel dead letter for the next call.
 
 Ordering by `updatedAt` has millisecond granularity, so rows patched inside one mutation tie and
 ties fall back to insertion order. A whole replay-and-drain cycle completing inside a single

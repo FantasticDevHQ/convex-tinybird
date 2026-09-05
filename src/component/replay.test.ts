@@ -345,7 +345,7 @@ describe("replayFailed", () => {
     await t.run(async (ctx) => {
       // Large enough for every leg below to be bounded by the clamp rather than by the
       // backlog running out — the legs run in sequence and each one consumes rows.
-      for (let i = 0; i < MAX_REPLAY_LIMIT * 2 + DEFAULT_REPLAY_LIMIT * 2 + 20; i += 1) {
+      for (let i = 0; i < MAX_REPLAY_LIMIT + DEFAULT_REPLAY_LIMIT * 4 + 20; i += 1) {
         await seedEvent(ctx, {
           datasource: "events",
           eventId: `dead_${i}`,
@@ -357,8 +357,7 @@ describe("replayFailed", () => {
       }
     });
 
-    // No limit: the conservative default, which is sized so one call stays well inside
-    // Convex's per-transaction byte limits at the component's default payload bound.
+    // No limit: half the operator work ceiling, independent of payload bytes.
     expect(await t.mutation(api.lib.replayFailed, {})).toEqual({
       replayed: DEFAULT_REPLAY_LIMIT,
       remaining: true,
