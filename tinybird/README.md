@@ -1,5 +1,10 @@
 # Generic Tinybird example
 
+For a new consuming app, follow [Install in another app](../docs/installing-in-another-app.md)
+first. It covers workspace provisioning, schema deployment, append and deployment tokens, and
+per-environment Convex configuration. This directory provides reference resources to copy into
+the host's infrastructure project; it does not configure a cloud workspace when the package is installed.
+
 These resources belong to the host application. The component sends the host's payload as
 canonical NDJSON and does not inspect its column names. For this reference schema, the host
 sets `event_id` equal to the enqueue envelope's `eventId`. Other consumers can choose a different

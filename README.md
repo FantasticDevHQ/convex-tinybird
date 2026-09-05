@@ -10,6 +10,11 @@ exactly-once ingestion or make raw additive aggregates safe.
 
 ## Install and mount
 
+Start with [Install in another app](./docs/installing-in-another-app.md) for the complete setup:
+per-app staging and production workspaces, host-owned schemas, scoped credentials, Convex
+deployment configuration, and delivery verification. Repeat that setup for each consuming app.
+Mounting this component does not provision Tinybird or reuse another app's infrastructure.
+
 This is currently a private workspace package, not a published npm release. Add
 `@fantastic-dev/convex-tinybird` as a workspace dependency alongside `convex`. The component's
 only runtime dependencies are Convex and Workpool; it imports no host schema or authentication.
