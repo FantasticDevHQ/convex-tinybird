@@ -70,6 +70,10 @@ returned by public functions, or logged.
 | `TINYBIRD_TOKEN` | Server-side datasource append credential | Enqueue stores events, but delivery is inert |
 | `TINYBIRD_HOST`  | Regional API origin                      | Uses the component's default Tinybird origin |
 
+Use a token scoped to `DATASOURCE:APPEND` for the intended datasource. A regional origin such as
+`https://api.eu-central-1.aws.tinybird.co` selects that Tinybird region;
+`http://127.0.0.1:7181` targets Tinybird Local.
+
 Use a bare HTTPS origin without a path, query, fragment, or embedded credentials. Loopback HTTP
 is supported for Tinybird Local. Invalid destinations and authentication failures pause the
 mount and appear in its health result.
