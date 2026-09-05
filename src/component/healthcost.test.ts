@@ -34,8 +34,8 @@ const BUDGET_SHARE = 0.35;
 
 /**
  * Pin the published share separately from the 35% safety ceiling, so a cap change
- * cannot silently consume headroom. At 965 reads, the four-byte creation-time step
- * moves the share by 0.000460, within the existing 0.0005 tolerance around 29.8%.
+ * cannot silently consume headroom. At 966 reads, the four-byte creation-time step
+ * moves the share by 0.000461, within the existing 0.0005 tolerance around 29.8%.
  */
 const DOCUMENTED_SHARE = 0.298;
 const SHARE_TOLERANCE = 0.0005;
@@ -78,12 +78,8 @@ const CREATION_TIME_STEP_BYTES = 4;
 /** `health` counts three states, each reading one row past the cap. */
 const STATES_COUNTED = 3;
 
-/**
- * `health` is `readHeartbeat` plus the three counts, and the heartbeat reads two documents
- * of its own — the settings row and the oldest waiting event. Two rows against 963 is
- * immaterial, but the sum is presented as the whole cost of the call, so it should be.
- */
-const HEARTBEAT_DOCUMENTS = 2;
+/** Scoped health reads global settings, datasource settings, and the oldest pending row. */
+const HEARTBEAT_DOCUMENTS = 3;
 
 /**
  * Builds the largest `events` row the contract permits, and measures it.

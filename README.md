@@ -192,11 +192,11 @@ The example exposes both through an operator query:
 
 ```ts
 export const operatorHeartbeat = query({
-  args: {},
+  args: { datasource: v.optional(v.string()) },
   returns: v.object({ heartbeat: v.any(), health: v.any() }),
-  handler: async (ctx) => ({
+  handler: async (ctx, { datasource }) => ({
     heartbeat: await productEvents.heartbeat(ctx),
-    health: await productEvents.health(ctx),
+    health: await productEvents.health(ctx, { datasource }),
   }),
 });
 ```
@@ -215,10 +215,10 @@ as `actor`. The component records that string but does not authenticate it.
 
 ```ts
 export const operatorPause = mutation({
-  args: { actor: v.string() },
+  args: { datasource: v.optional(v.string()), actor: v.string() },
   returns: v.any(),
   // A real host authorizes `actor` before this line.
-  handler: async (ctx, { actor }) => productEvents.pause(ctx, { actor }),
+  handler: async (ctx, { actor, datasource }) => productEvents.pause(ctx, { actor, datasource }),
 });
 ```
 
@@ -230,13 +230,13 @@ larger backlog remains; do not remove the bound.
 
 ```ts
 export const operatorResume = mutation({
-  args: { actor: v.string() },
+  args: { datasource: v.optional(v.string()), actor: v.string() },
   returns: v.object({ requeued: v.number() }),
-  handler: async (ctx, { actor }) => {
+  handler: async (ctx, { actor, datasource }) => {
     let requeued = 0;
     let pass = 0;
     do {
-      const result = await productEvents.resume(ctx, { actor });
+      const result = await productEvents.resume(ctx, { actor, datasource });
       requeued += result.requeued;
       if (result.requeued === 0) break;
       pass += 1;
@@ -257,12 +257,16 @@ Fix the cause before replaying. This wrapper processes a bounded set of dead let
 
 ```ts
 export const operatorReplayFailed = mutation({
-  args: { actor: v.string(), category: v.optional(vFailureCategory) },
+  args: {
+    datasource: v.optional(v.string()),
+    actor: v.string(),
+    category: v.optional(vFailureCategory),
+  },
   returns: v.object({ replayed: v.number() }),
-  handler: async (ctx, { actor, category }) => {
+  handler: async (ctx, { actor, category, datasource }) => {
     let replayed = 0;
     for (let pass = 0; pass < 10; pass += 1) {
-      const result = await productEvents.replayFailed(ctx, { actor, category });
+      const result = await productEvents.replayFailed(ctx, { actor, category, datasource });
       replayed += result.replayed;
       if (!result.remaining) break;
     }
@@ -308,8 +312,20 @@ history. `remaining` describes dead letters present now, so persistent failures 
 Use bounded operator requests and inspect health between them. A `payload_missing` event needs
 an identical re-enqueue to restore its payload; replay cannot reconstruct missing data.
 
-Operator controls are mount-wide. `enqueue` and `status` accept a datasource, but pause, resume,
-health, and bulk replay affect the whole mount. Use separate mounts when streams need separate controls.
+`pause`, `resume`, `health`, and `replayFailed` accept an optional `datasource`. For example,
+pass `datasource: "clicks"` to repair that stream without replaying or resuming `orders`.
+Replay can combine `datasource` and `category`; both predicates are indexed before batching.
+Scoped health reports that datasource's counts, oldest pending age, delivery signals, and
+scoped operator actions. `heartbeat` remains the cheap mount-wide monitor.
+
+Omitting `datasource` keeps mount-wide controls. A global pause blocks every datasource, and a
+scoped resume cannot override it. A global resume clears all pauses and resumes all datasources;
+use a scoped resume to preserve another datasource's pause. Credential failures still pause the mount because its datasources share credentials.
+
+Multiple datasources can share a mount. Use separate mounts for separate credentials, workpools,
+or retention policies. Existing mounts need no pause-settings migration. Scoped delivery
+metadata starts accumulating after upgrade; existing event counts and backlog ages are available
+immediately.
 
 ## Maintenance and recovery
 

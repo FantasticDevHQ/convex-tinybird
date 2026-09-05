@@ -2,6 +2,7 @@ import { ConvexError, v } from "convex/values";
 
 import { canonicalJson, payloadFingerprint, utf8Length } from "./canonical.js";
 import { env, mutation, query } from "./_generated/server.js";
+import { readSettings, readPause, failedEvents, failedEventsByCategory } from "./scope.js";
 import { signReadToken } from "./jwt.js";
 import { resolveDestination } from "./destination.js";
 import {
@@ -48,20 +49,20 @@ import {
 export const heartbeat = query({
   args: {},
   returns: vHeartbeat,
-  handler: readHeartbeat,
+  handler: (ctx) => readHeartbeat(ctx),
 });
 
 /** Delivery health for operators: configuration, pause state and bounded backlog counts. */
 export const health = query({
-  args: {},
+  args: { datasource: v.optional(v.string()) },
   returns: vHealth,
-  handler: async (ctx) => {
+  handler: async (ctx, { datasource }) => {
     // Independent index range scans; there is no ordering between them.
     const [heartbeatFields, pending, delivering, failed] = await Promise.all([
-      readHeartbeat(ctx),
-      boundedCount(ctx, "pending"),
-      boundedCount(ctx, "delivering"),
-      boundedCount(ctx, "failed"),
+      readHeartbeat(ctx, datasource),
+      boundedCount(ctx, "pending", datasource),
+      boundedCount(ctx, "delivering", datasource),
+      boundedCount(ctx, "failed", datasource),
     ]);
     return {
       ...heartbeatFields,
@@ -245,15 +246,25 @@ export const getStatus = query({
  * caller; the component never authenticates, so a host must authorize this itself.
  */
 export const pause = mutation({
-  args: { reason: v.optional(vPausedReason), actor: v.optional(v.string()) },
+  args: {
+    datasource: v.optional(v.string()),
+    reason: v.optional(vPausedReason),
+    actor: v.optional(v.string()),
+  },
   returns: v.object({ paused: v.boolean() }),
-  handler: async (ctx, { reason, actor }) => {
-    await patchSettings(ctx, {
-      paused: true,
-      pausedReason: reason ?? "operator",
-      pausedAt: Date.now(),
-      lastOperatorAction: { kind: "pause" as const, actor: recordActor(actor), at: Date.now() },
-    });
+  handler: async (ctx, { reason, actor, datasource }) => {
+    const global = await readSettings(ctx);
+    await patchSettings(
+      ctx,
+      {
+        paused: true,
+        ...(datasource === undefined ? {} : { pauseGeneration: global?.pauseGeneration ?? 0 }),
+        pausedReason: reason ?? "operator",
+        pausedAt: Date.now(),
+        lastOperatorAction: { kind: "pause" as const, actor: recordActor(actor), at: Date.now() },
+      },
+      datasource,
+    );
     return { paused: true };
   },
 });
@@ -266,18 +277,28 @@ export const pause = mutation({
  * Hosts call this in a loop until `requeued` is zero.
  */
 export const resume = mutation({
-  args: { actor: v.optional(v.string()), limit: v.optional(v.number()) },
+  args: {
+    datasource: v.optional(v.string()),
+    actor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
   returns: v.object({ paused: v.boolean(), requeued: v.number() }),
-  handler: async (ctx, { actor, limit }) => {
-    const settings = await ctx.db.query("settings").first();
+  handler: async (ctx, { actor, limit, datasource }) => {
+    const global = await readSettings(ctx);
     const batch = boundedBatch(limit, DEFAULT_RESUME_LIMIT, DEFAULT_RESUME_LIMIT);
-    if (settings !== undefined && settings !== null && settings.paused) {
-      await ctx.db.patch(settings._id, {
+    await patchSettings(
+      ctx,
+      {
         paused: false,
         pausedReason: undefined,
         pausedAt: undefined,
-      });
-    }
+        // Mount-wide resume clears all scoped pauses without scanning settings rows.
+        ...(datasource === undefined
+          ? { pauseGeneration: (global?.pauseGeneration ?? 0) + 1 }
+          : {}),
+      },
+      datasource,
+    );
     // Exactly the events the pool is NOT already working on. A row can be `pending` because
     // it is waiting for an operator, or because an attempt failed and the pool is about to
     // try again; queueing a second work item for the latter gives the event two independent
@@ -288,12 +309,19 @@ export const resume = mutation({
     // ones behind them, so the loop above reports "nothing left" while events still wait.
     // That is not hypothetical: with a backlog larger than the window it happens on every
     // drain where the host loops faster than the pool empties, which is the normal case.
-    const waiting = await ctx.db
-      .query("events")
-      .withIndex("by_state_workId_createdAt", (q) =>
-        q.eq("state", "pending").eq("workId", undefined),
-      )
-      .take(batch);
+    const waiting = await (
+      datasource === undefined
+        ? ctx.db
+            .query("events")
+            .withIndex("by_state_workId_createdAt", (q) =>
+              q.eq("state", "pending").eq("workId", undefined),
+            )
+        : ctx.db
+            .query("events")
+            .withIndex("by_datasource_state_workId_createdAt", (q) =>
+              q.eq("datasource", datasource).eq("state", "pending").eq("workId", undefined),
+            )
+    ).take(batch);
     // Counts events actually queued, not rows visited. `scheduleDelivery` declines when the
     // instance is unconfigured, paused, or the row is no longer pending, and reporting those
     // as requeued would put a number in the audit trail that describes nothing that happened.
@@ -303,15 +331,20 @@ export const resume = mutation({
     }
     // Written after the loop, not before it: `count` is the number of events this call
     // actually put back to work, and that number does not exist until the loop has run.
-    await patchSettings(ctx, {
-      lastOperatorAction: {
-        kind: "resume" as const,
-        actor: recordActor(actor),
-        at: Date.now(),
-        count: requeued,
+    await patchSettings(
+      ctx,
+      {
+        lastOperatorAction: {
+          kind: "resume" as const,
+          actor: recordActor(actor),
+          at: Date.now(),
+          count: requeued,
+        },
       },
-    });
-    return { paused: false, requeued };
+      datasource,
+    );
+    const paused = datasource === undefined ? false : (await readPause(ctx, datasource)).paused;
+    return { paused, requeued };
   },
 });
 
@@ -478,20 +511,16 @@ export const replayFailed = mutation({
   args: {
     limit: v.optional(v.number()),
     category: v.optional(vFailureCategory),
+    datasource: v.optional(v.string()),
     actor: v.optional(v.string()),
   },
   returns: v.object({ replayed: v.number(), remaining: v.boolean() }),
-  handler: async (ctx, { limit, actor, category }) => {
+  handler: async (ctx, { limit, actor, category, datasource }) => {
     if (category !== undefined) {
       // Convex indexes missing optional fields as undefined (the same mechanism resume
       // uses for missing workId). Verified on a live anonymous deployment: an old failed
       // row without this field blocks replay, then becomes selectable after backfill.
-      const legacy = await ctx.db
-        .query("events")
-        .withIndex("by_state_lastErrorCategory_updatedAt", (q) =>
-          q.eq("state", "failed").eq("lastErrorCategory", undefined),
-        )
-        .first();
+      const legacy = await failedEventsByCategory(ctx, undefined, datasource).first();
       if (legacy !== null) {
         throw new ConvexError({ code: "category_index_not_ready" as const });
       }
@@ -514,24 +543,24 @@ export const replayFailed = mutation({
     // once before any is tried twice.
     const failed =
       category === undefined
-        ? ctx.db.query("events").withIndex("by_state_updatedAt", (q) => q.eq("state", "failed"))
-        : ctx.db
-            .query("events")
-            .withIndex("by_state_lastErrorCategory_updatedAt", (q) =>
-              q.eq("state", "failed").eq("lastErrorCategory", category),
-            );
+        ? failedEvents(ctx, datasource)
+        : failedEventsByCategory(ctx, category, datasource);
     const found = await failed.take(batch + 1);
     const selected = found.slice(0, batch);
 
     for (const event of selected) await requeueDeadLetter(ctx, event);
-    await patchSettings(ctx, {
-      lastOperatorAction: {
-        kind: "replayFailed" as const,
-        actor: recordActor(actor),
-        at: Date.now(),
-        count: selected.length,
+    await patchSettings(
+      ctx,
+      {
+        lastOperatorAction: {
+          kind: "replayFailed" as const,
+          actor: recordActor(actor),
+          at: Date.now(),
+          count: selected.length,
+        },
       },
-    });
+      datasource,
+    );
     return { replayed: selected.length, remaining: found.length > selected.length };
   },
 });

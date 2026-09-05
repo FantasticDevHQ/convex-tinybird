@@ -12,11 +12,11 @@ import {
   MAX_ERROR_HISTORY,
   type vDeliveryError,
   type vHeartbeat,
-  type vOperatorAction,
-  type vPausedReason,
 } from "./contract.js";
 import { EVENT_ROW_BYTES, PAYLOAD_ROW_OVERHEAD_BYTES } from "./budget.js";
 import { pool } from "./pool.js";
+import { readSettings, readPause, effectivePause } from "./scope.js";
+export { patchSettings } from "./scope.js";
 import { sanitizeMessage } from "./sanitize.js";
 
 /**
@@ -26,27 +26,6 @@ import { sanitizeMessage } from "./sanitize.js";
  * helpers moved: every Convex function stays where it was, so no `api.*` or `internal.*`
  * path changed and no host or test had to be repointed.
  */
-
-/** Creates the single settings row on first write. */
-export async function patchSettings(
-  ctx: MutationCtx,
-  patch: {
-    lastDeliveredAt?: number;
-    lastError?: Infer<typeof vDeliveryError>;
-    paused?: boolean;
-    pausedReason?: Infer<typeof vPausedReason>;
-    pausedAt?: number;
-    lastOperatorAction?: Infer<typeof vOperatorAction>;
-    lastCleanupAt?: number;
-  },
-): Promise<void> {
-  const settings = await ctx.db.query("settings").first();
-  if (settings === null) {
-    await ctx.db.insert("settings", { paused: false, ...patch });
-    return;
-  }
-  await ctx.db.patch(settings._id, patch);
-}
 
 /**
  * Keep a bounded history of earlier failures.
@@ -77,11 +56,20 @@ export function recordActor(actor: string | undefined): string | undefined {
 }
 
 /** Reads at most `COUNT_CAP + 1` rows so health stays cheap on a large outbox. */
-export async function boundedCount(ctx: QueryCtx, state: EventState): Promise<BoundedCount> {
-  const rows = await ctx.db
-    .query("events")
-    .withIndex("by_state_createdAt", (q) => q.eq("state", state))
-    .take(COUNT_CAP + 1);
+export async function boundedCount(
+  ctx: QueryCtx,
+  state: EventState,
+  datasource?: string,
+): Promise<BoundedCount> {
+  const query =
+    datasource === undefined
+      ? ctx.db.query("events").withIndex("by_state_createdAt", (q) => q.eq("state", state))
+      : ctx.db
+          .query("events")
+          .withIndex("by_datasource_state_createdAt", (q) =>
+            q.eq("datasource", datasource).eq("state", state),
+          );
+  const rows = await query.take(COUNT_CAP + 1);
   const capped = rows.length > COUNT_CAP;
   return { count: capped ? COUNT_CAP : rows.length, capped };
 }
@@ -90,21 +78,29 @@ export async function boundedCount(ctx: QueryCtx, state: EventState): Promise<Bo
  * The always-affordable signals: is it configured, is it paused and why, how long the oldest
  * waiting event has waited, when something last got through, and the newest failure.
  *
- * Reads exactly two documents regardless of how much is queued or how large events are, so
- * this is what an operator should alert on. `health` adds counts and costs more.
+ * The mount heartbeat reads two documents; scoped health adds one datasource-settings read.
+ * These reads stay constant regardless of backlog. `health` adds bounded counts.
  */
-export async function readHeartbeat(ctx: QueryCtx): Promise<Infer<typeof vHeartbeat>> {
-  const [settings, oldestPending] = await Promise.all([
-    ctx.db.query("settings").first(),
-    ctx.db
-      .query("events")
-      .withIndex("by_state_createdAt", (q) => q.eq("state", "pending"))
-      .first(),
+export async function readHeartbeat(
+  ctx: QueryCtx,
+  datasource?: string,
+): Promise<Infer<typeof vHeartbeat>> {
+  const [global, scoped, oldestPending] = await Promise.all([
+    readSettings(ctx),
+    datasource === undefined ? null : readSettings(ctx, datasource),
+    (datasource === undefined
+      ? ctx.db.query("events").withIndex("by_state_createdAt", (q) => q.eq("state", "pending"))
+      : ctx.db
+          .query("events")
+          .withIndex("by_datasource_state_createdAt", (q) =>
+            q.eq("datasource", datasource).eq("state", "pending"),
+          )
+    ).first(),
   ]);
+  const settings = datasource === undefined ? global : scoped;
   return {
     configured: hasAppendToken(),
-    paused: settings?.paused ?? false,
-    pausedReason: settings?.pausedReason,
+    ...effectivePause(global, scoped),
     // The index is ordered by creation, so the first waiting row is the oldest. A backlog
     // that is growing shows up in the counts; a backlog that is STUCK shows up here.
     oldestPendingAgeMs: oldestPending === null ? null : Date.now() - oldestPending.createdAt,
@@ -133,10 +129,9 @@ export async function readHeartbeat(ctx: QueryCtx): Promise<Infer<typeof vHeartb
  */
 export async function scheduleDelivery(ctx: MutationCtx, id: Id<"events">): Promise<boolean> {
   if (!hasAppendToken()) return false;
-  const settings = await ctx.db.query("settings").first();
-  if (settings?.paused === true) return false;
   const event = await ctx.db.get(id);
   if (event === null || event.state !== "pending") return false;
+  if ((await readPause(ctx, event.datasource)).paused) return false;
 
   const workId = await pool.enqueueAction(
     ctx,

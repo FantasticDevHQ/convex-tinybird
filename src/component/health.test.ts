@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 
 import { api } from "./_generated/api";
+import { readHeartbeat } from "./state";
+import type { QueryCtx } from "./_generated/server";
 import { COUNT_CAP } from "./contract";
 import { MAX_ERROR_MESSAGE_LENGTH } from "./sanitize";
 import {
@@ -273,19 +275,30 @@ describe("heartbeat", () => {
     expect(beat.paused).toBe(false);
   });
 
-  it("reads only the settings row and the oldest waiting event", () => {
-    // Behaviourally indistinguishable from a counting implementation, for the same reason
-    // the bounded read is: the harness enforces no read limit. Assert the shape instead.
-    const source = readFileSync(new URL("./state.ts", import.meta.url), "utf8");
-    const start = source.indexOf("async function readHeartbeat");
-    expect(start).toBeGreaterThan(-1);
-    const body = source
-      .slice(start, source.indexOf("\n}", start))
-      .replace(/\/\/[^\n]*/gu, "")
-      .replace(/\/\*[\s\S]*?\*\//gu, "");
-
-    expect(body).not.toMatch(/boundedCount|\.take\(|\.collect\(|for await|\.paginate\(/u);
-    // One row from each: the settings singleton and the oldest waiting event.
-    expect((body.match(/\.first\(\)/gu) ?? []).length).toBe(2);
-  });
+  it.each([undefined, "orders"])(
+    "bounds actual heartbeat reads for scope %s",
+    async (datasource) => {
+      const reads: string[] = [];
+      const ctx = {
+        db: {
+          query: (table: string) => {
+            const read = async () => {
+              reads.push(table);
+              return null;
+            };
+            const range = { first: read, unique: read };
+            return { ...range, withIndex: () => range };
+          },
+        },
+      } as unknown as QueryCtx;
+      // Deliberately offers no take/collect/filter methods. A counting implementation
+      // cannot pass, including when a settings read moves into a helper.
+      await readHeartbeat(ctx, datasource);
+      expect(reads.sort()).toEqual(
+        datasource === undefined
+          ? ["events", "settings"]
+          : ["datasourceSettings", "events", "settings"],
+      );
+    },
+  );
 });

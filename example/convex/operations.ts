@@ -32,19 +32,19 @@ const productEvents = new TinybirdDelivery(components.productEvents);
  */
 /** Both signals an operator dashboard polls: the cheap one and the counted one. */
 export const operatorHeartbeat = query({
-  args: {},
+  args: { datasource: v.optional(v.string()) },
   returns: v.object({ heartbeat: v.any(), health: v.any() }),
-  handler: async (ctx) => ({
+  handler: async (ctx, { datasource }) => ({
     heartbeat: await productEvents.heartbeat(ctx),
-    health: await productEvents.health(ctx),
+    health: await productEvents.health(ctx, { datasource }),
   }),
 });
 
 export const operatorPause = mutation({
-  args: { actor: v.string() },
+  args: { datasource: v.optional(v.string()), actor: v.string() },
   returns: v.any(),
   // A real host authorizes `actor` before this line.
-  handler: async (ctx, { actor }) => productEvents.pause(ctx, { actor }),
+  handler: async (ctx, { actor, datasource }) => productEvents.pause(ctx, { actor, datasource }),
 });
 
 /**
@@ -54,13 +54,13 @@ export const operatorPause = mutation({
  * scheduled. Looping is what an operator actually wants after an outage.
  */
 export const operatorResume = mutation({
-  args: { actor: v.string() },
+  args: { datasource: v.optional(v.string()), actor: v.string() },
   returns: v.object({ requeued: v.number() }),
-  handler: async (ctx, { actor }) => {
+  handler: async (ctx, { actor, datasource }) => {
     let requeued = 0;
     let pass = 0;
     do {
-      const result = await productEvents.resume(ctx, { actor });
+      const result = await productEvents.resume(ctx, { actor, datasource });
       requeued += result.requeued;
       if (result.requeued === 0) break;
       pass += 1;
@@ -77,12 +77,16 @@ export const operatorResume = mutation({
  * which is the half of the sample most likely to be wrong when copied.
  */
 export const operatorReplayFailed = mutation({
-  args: { actor: v.string(), category: v.optional(vFailureCategory) },
+  args: {
+    datasource: v.optional(v.string()),
+    actor: v.string(),
+    category: v.optional(vFailureCategory),
+  },
   returns: v.object({ replayed: v.number() }),
-  handler: async (ctx, { actor, category }) => {
+  handler: async (ctx, { actor, category, datasource }) => {
     let replayed = 0;
     for (let pass = 0; pass < 10; pass += 1) {
-      const result = await productEvents.replayFailed(ctx, { actor, category });
+      const result = await productEvents.replayFailed(ctx, { actor, category, datasource });
       replayed += result.replayed;
       if (!result.remaining) break;
     }

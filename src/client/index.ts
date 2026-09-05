@@ -143,7 +143,7 @@ export class TinybirdDelivery {
    */
   async pause(
     ctx: RunMutationCtx,
-    args: { reason?: PausedReason; actor?: string } = {},
+    args: { reason?: PausedReason; actor?: string; datasource?: string } = {},
   ): Promise<{ paused: boolean }> {
     return ctx.runMutation(this.component.lib.pause, args);
   }
@@ -154,7 +154,7 @@ export class TinybirdDelivery {
    */
   async resume(
     ctx: RunMutationCtx,
-    args: { actor?: string; limit?: number } = {},
+    args: { actor?: string; limit?: number; datasource?: string } = {},
   ): Promise<{ paused: boolean; requeued: number }> {
     return ctx.runMutation(this.component.lib.resume, args);
   }
@@ -183,7 +183,7 @@ export class TinybirdDelivery {
    */
   async replayFailed(
     ctx: RunMutationCtx,
-    args: { limit?: number; actor?: string; category?: FailureCategory } = {},
+    args: { limit?: number; actor?: string; category?: FailureCategory; datasource?: string } = {},
   ): Promise<{ replayed: number; remaining: boolean }> {
     return ctx.runMutation(this.component.lib.replayFailed, args);
   }
@@ -288,7 +288,7 @@ export class TinybirdDelivery {
   }
 
   /** Delivery health: configuration, pause state and bounded backlog counts. */
-  async health(ctx: RunQueryCtx): Promise<Health> {
-    return ctx.runQuery(this.component.lib.health, {});
+  async health(ctx: RunQueryCtx, args: { datasource?: string } = {}): Promise<Health> {
+    return ctx.runQuery(this.component.lib.health, args);
   }
 }

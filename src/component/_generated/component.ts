@@ -111,7 +111,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       health: FunctionReference<
         "query",
         "internal",
-        {},
+        { datasource?: string },
         {
           configured: boolean;
           counts: {
@@ -219,6 +219,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           actor?: string;
+          datasource?: string;
           reason?: "unauthorized" | "invalid_host" | "operator";
         },
         { paused: boolean },
@@ -261,6 +262,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | "exhausted"
             | "stuck"
             | "payload_missing";
+          datasource?: string;
           limit?: number;
         },
         { remaining: boolean; replayed: number },
@@ -269,7 +271,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       resume: FunctionReference<
         "mutation",
         "internal",
-        { actor?: string; limit?: number },
+        { actor?: string; datasource?: string; limit?: number },
         { paused: boolean; requeued: number },
         Name
       >;

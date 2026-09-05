@@ -89,16 +89,16 @@ export const MAX_ERROR_HISTORY = 5;
  * The caps count UTF-8 bytes, so multibyte strings cost no more than ASCII at the bound.
  * The payload lives separately and does not contribute to health reads.
  *
- * Three state counts each read cap + 1 rows. The heartbeat reads two more documents:
- * settings and the oldest waiting event. Thus the conservative cost is
- * `(3 * (cap + 1) + 2) * 2587` bytes against an 8 MiB read budget.
+ * Three state counts each read cap + 1 rows. Scoped health reads three more documents:
+ * global settings, datasource settings and the oldest waiting event. Thus the conservative cost is
+ * `(3 * (cap + 1) + 3) * 2587` bytes against an 8 MiB read budget.
  * Target roughly 30% of that budget and round down to 320 rows per state:
  *
  * | cap | worst call | share of budget |
  * |---|---|---|
- * | 150 | 1.12 MiB | 14.0% |
+ * | 150 | 1.13 MiB | 14.0% |
  * | 320 | 2.38 MiB | 29.8% |
- * | 1000 | 7.41 MiB | 92.7% |
+ * | 1000 | 7.42 MiB | 92.7% |
  *
  * The test pins the row size and the documented share independently of the unchanged
  * 35% safety ceiling. Its JSON measurement slightly overestimates Convex storage for

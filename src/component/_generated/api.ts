@@ -22,6 +22,7 @@ import type * as migrations from "../migrations.js";
 import type * as pool from "../pool.js";
 import type * as recovery from "../recovery.js";
 import type * as sanitize from "../sanitize.js";
+import type * as scope from "../scope.js";
 import type * as state from "../state.js";
 
 import type {
@@ -46,6 +47,7 @@ const fullApi: ApiFromModules<{
   pool: typeof pool;
   recovery: typeof recovery;
   sanitize: typeof sanitize;
+  scope: typeof scope;
   state: typeof state;
 }> = anyApi as any;
 

@@ -5,6 +5,7 @@ import { internalMutation, internalQuery } from "./_generated/server.js";
 import { vDeliveryError, vEventState, vPausedReason } from "./contract.js";
 import { readAppendToken } from "./credentials.js";
 import { patchSettings, pushHistory } from "./state.js";
+import { patchDeliverySettings, readPause } from "./scope.js";
 import { sanitizeMessage } from "./sanitize.js";
 
 /**
@@ -51,12 +52,12 @@ export const loadForDelivery = internalQuery({
     // A missing payload is NOT reported as a missing event. Collapsing the two was the
     // defect: the caller reads a null as a benign race and skips, so the row sat `pending`
     // with no attempt and no error, invisible to replay and re-queued by resume forever.
-    const settings = await ctx.db.query("settings").first();
+    const pause = await readPause(ctx, event.datasource);
     return {
       datasource: event.datasource,
       payload: stored?.payload,
       state: event.state,
-      paused: settings?.paused ?? false,
+      paused: pause.paused,
       requestTimeoutMs: event.requestTimeoutMs,
     };
   },
@@ -102,7 +103,7 @@ export const markAttemptFailed = internalMutation({
       previousErrors: pushHistory(event.previousErrors, event.lastError),
       updatedAt: Date.now(),
     });
-    await patchSettings(ctx, { lastError: error });
+    await patchDeliverySettings(ctx, event.datasource, { lastError: error });
     return null;
   },
 });
@@ -138,7 +139,7 @@ export const markDelivered = internalMutation({
     if (event === null || event.state !== "delivering") return null;
     const now = Date.now();
     await ctx.db.patch(eventId, { state: "delivered", deliveredAt: now, updatedAt: now });
-    await patchSettings(ctx, { lastDeliveredAt: now });
+    await patchDeliverySettings(ctx, event.datasource, { lastDeliveredAt: now });
     return null;
   },
 });
@@ -162,7 +163,7 @@ export const markFailed = internalMutation({
       previousErrors: pushHistory(event.previousErrors, event.lastError),
       updatedAt: Date.now(),
     });
-    await patchSettings(ctx, { lastError: error });
+    await patchDeliverySettings(ctx, event.datasource, { lastError: error });
     return null;
   },
 });
@@ -216,7 +217,7 @@ export const onDeliveryComplete = internalMutation({
         previousErrors: pushHistory(event.previousErrors, event.lastError),
         updatedAt: Date.now(),
       });
-      await patchSettings(ctx, { lastError: error });
+      await patchDeliverySettings(ctx, event.datasource, { lastError: error });
       return null;
     }
     if (result.kind === "canceled") {
@@ -249,6 +250,7 @@ export const markPaused = internalMutation({
         updatedAt: Date.now(),
       });
     }
+    if (event !== null) await patchDeliverySettings(ctx, event.datasource, { lastError: error });
     await patchSettings(ctx, {
       paused: true,
       pausedReason: reason,

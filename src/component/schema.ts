@@ -72,6 +72,15 @@ export const events = defineTable({
   // the window and hide events behind them that genuinely need requeueing.
   .index("by_state_workId_createdAt", ["state", "workId", "createdAt"])
   .index("by_state_updatedAt", ["state", "updatedAt"])
+  .index("by_datasource_state_createdAt", ["datasource", "state", "createdAt"])
+  .index("by_datasource_state_updatedAt", ["datasource", "state", "updatedAt"])
+  .index("by_datasource_state_workId_createdAt", ["datasource", "state", "workId", "createdAt"])
+  .index("by_datasource_state_lastErrorCategory_updatedAt", [
+    "datasource",
+    "state",
+    "lastErrorCategory",
+    "updatedAt",
+  ])
   .index("by_state_lastErrorCategory_updatedAt", ["state", "lastErrorCategory", "updatedAt"]);
 
 /**
@@ -93,8 +102,10 @@ export const payloads = defineTable({
 }).index("by_event", ["eventId"]);
 
 /** Single row, created lazily. Destination-wide state; never a credential. */
-export const settings = defineTable({
+const settingsFields = {
   paused: v.boolean(),
+  /** Global resume increments this; scoped pauses capture its current value. */
+  pauseGeneration: v.optional(v.number()),
   pausedReason: v.optional(vPausedReason),
   pausedAt: v.optional(v.number()),
   lastDeliveredAt: v.optional(v.number()),
@@ -108,6 +119,11 @@ export const settings = defineTable({
    * the record of the last human action within a day of it happening.
    */
   lastCleanupAt: v.optional(v.number()),
-});
+};
+export const settings = defineTable(settingsFields);
+export const datasourceSettings = defineTable({ ...settingsFields, datasource: v.string() }).index(
+  "by_datasource",
+  ["datasource"],
+);
 
-export default defineSchema({ events, payloads, settings });
+export default defineSchema({ events, payloads, settings, datasourceSettings });

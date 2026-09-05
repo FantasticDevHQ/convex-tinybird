@@ -214,9 +214,9 @@ strings contain ASCII or multibyte text. Previously, UTF-16 length checks admitt
 row with CJK text. The measurement uses JSON as a conservative proxy for Convex storage for
 this fixture, and pins the row size with a four-byte allowance for creation-time formatting.
 
-Three state counts each read one row past `COUNT_CAP`, and the heartbeat reads settings plus
-the oldest waiting event. The worst-case calculation is
-`(3 * (cap + 1) + 2) * 2587` bytes against an 8 MiB budget. Targeting roughly 30% of the budget
+Three state counts each read one row past `COUNT_CAP`. Scoped health also reads global settings,
+datasource settings, and the oldest waiting event. The worst-case calculation is
+`(3 * (cap + 1) + 3) * 2587` bytes against an 8 MiB budget. Targeting roughly 30% of the budget
 and rounding down gives **320 rows per state**, or **2.38 MiB, 29.8%**. The test pins this
 published percentage separately from the unchanged **35% safety ceiling**.
 
@@ -372,17 +372,23 @@ oversight: keeping every delivered row forever would make the table grow without
 Tinybird-side dedupe on `event_id` is what covers a producer that re-emits something older than
 the window.
 
-## Operator controls are mount-wide
+## Datasource-scoped operator controls
 
-`enqueue` and `getStatus` take a datasource, but `pause`, `resume`, `health` and `replayFailed`
-do not. A mount that carries more than one datasource therefore cannot pause, resume, replay or
-report on them independently: every operator action applies to all of them.
+`pause`, `resume`, `health`, and `replayFailed` accept an optional `datasource`. Reads use
+datasource-prefixed indexes, including the combined category index, before limiting a batch.
+Omitting the argument retains mount-wide controls.
 
-The shape of the API invites the mistake, because `enqueue` accepts the datasource as a free
-parameter and nothing rejects a second one. A host that writes `orders` and `clicks` into one
-mount, then fixes a schema break in `clicks` and replays, will also resend every unfixed `orders`
-dead letter against its unfixed cause. Mount the component once per datasource until the operator
-surface is datasource-scoped, which is FTD-2528.
+`datasourceSettings` indexes each stream's pause, delivery and operator state. `settings` keeps
+mount-wide state. Scheduling and delivery check both. Global pauses override scoped resumes;
+credential failures remain global.
+
+Global resume clears all pauses by incrementing a generation on the singleton. Scoped pause
+records that generation; scoped resume clears only its own flag. This avoids an unbounded
+settings update or paused rows blocking a resume batch. Use scoped resume to preserve other pauses.
+
+Scoped health reports counts, lag, delivery metadata and effective pause state. Metadata costs
+three reads; heartbeat costs two. No settings migration is needed. Scoped delivery metadata
+starts with new activity; backlog is available immediately. Credentials and retention remain per mount.
 
 ## Instance isolation
 
