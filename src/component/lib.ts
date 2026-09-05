@@ -30,6 +30,7 @@ import {
   vEnqueueResult,
   vEventIdentity,
   vPausedReason,
+  vFailureCategory,
   vEventStatus,
   vHealth,
   vHeartbeat,
@@ -476,21 +477,31 @@ export const reclaimOrphanedPayloads = mutation({
 export const replayFailed = mutation({
   args: {
     limit: v.optional(v.number()),
+    category: v.optional(vFailureCategory),
     actor: v.optional(v.string()),
   },
   returns: v.object({ replayed: v.number(), remaining: v.boolean() }),
-  handler: async (ctx, { limit, actor }) => {
+  handler: async (ctx, { limit, actor, category }) => {
+    if (category !== undefined) {
+      // Convex indexes missing optional fields as undefined (the same mechanism resume
+      // uses for missing workId). Verified on a live anonymous deployment: an old failed
+      // row without this field blocks replay, then becomes selectable after backfill.
+      const legacy = await ctx.db
+        .query("events")
+        .withIndex("by_state_lastErrorCategory_updatedAt", (q) =>
+          q.eq("state", "failed").eq("lastErrorCategory", undefined),
+        )
+        .first();
+      if (legacy !== null) {
+        throw new ConvexError({ code: "category_index_not_ready" as const });
+      }
+    }
     const batch = boundedBatch(limit, DEFAULT_REPLAY_LIMIT, MAX_REPLAY_LIMIT);
     // One row past the batch, so `remaining` is answered by the same read rather than by a
     // second query that could disagree with it.
     //
-    // There is deliberately no category filter here. Requeuing is what moves this window
-    // forward: a replayed row leaves the `failed` range, so the next call reads the rows
-    // behind it. A filter applied to the page after the read breaks that — rows that do
-    // not match stay `failed`, the window never advances, and any category whose rows sit
-    // past the first page is unreachable while the call reports `remaining: false`. Doing
-    // it correctly means indexing the category rather than filtering a page, which is
-    // FTD-2527. Replaying one event at a time is `replayEvent`.
+    // The category predicate belongs in the index: filtering a page would leave
+    // unrelated dead letters at the front and hide matching rows behind them.
     //
     // Ordered by `updatedAt`, NOT `createdAt`. An event that is replayed, sent, and fails
     // again comes straight back to `failed`; ordered by creation it would return to the
@@ -501,10 +512,15 @@ export const replayFailed = mutation({
     // had been replayed three times each while the other three had not been replayed at
     // all. `updatedAt` sends a re-failed row to the back, so every dead letter is tried
     // once before any is tried twice.
-    const found = await ctx.db
-      .query("events")
-      .withIndex("by_state_updatedAt", (q) => q.eq("state", "failed"))
-      .take(batch + 1);
+    const failed =
+      category === undefined
+        ? ctx.db.query("events").withIndex("by_state_updatedAt", (q) => q.eq("state", "failed"))
+        : ctx.db
+            .query("events")
+            .withIndex("by_state_lastErrorCategory_updatedAt", (q) =>
+              q.eq("state", "failed").eq("lastErrorCategory", category),
+            );
+    const found = await failed.take(batch + 1);
     const selected = found.slice(0, batch);
 
     for (const event of selected) await requeueDeadLetter(ctx, event);

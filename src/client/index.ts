@@ -32,6 +32,7 @@ import {
   type EnqueueResult,
   type EventIdentity,
   type EventStatus,
+  type FailureCategory,
   type Health,
   type Heartbeat,
   type PausedReason,
@@ -173,9 +174,8 @@ export class TinybirdDelivery {
    * queue rather than being picked again immediately. Identity and payload are preserved,
    * so a replayed event is the same event.
    *
-   * There is no category filter, on purpose: replaying is what advances the scan, so a
-   * filter that skipped rows would leave them parked at the front of the window and make
-   * everything behind them unreachable. Use {@link replayEvent} to replay one event.
+   * An optional category selects its own index range, so unrelated failures cannot
+   * hide matching rows behind a page. Omit it to replay all categories.
    *
    * `remaining` means dead letters exist right now, not that there are ones you have not
    * seen. If the cause was not really fixed, replayed events fail again and `remaining`
@@ -183,7 +183,7 @@ export class TinybirdDelivery {
    */
   async replayFailed(
     ctx: RunMutationCtx,
-    args: { limit?: number; actor?: string } = {},
+    args: { limit?: number; actor?: string; category?: FailureCategory } = {},
   ): Promise<{ replayed: number; remaining: boolean }> {
     return ctx.runMutation(this.component.lib.replayFailed, args);
   }

@@ -34,8 +34,8 @@ const BUDGET_SHARE = 0.35;
 
 /**
  * Pin the published share separately from the 35% safety ceiling, so a cap change
- * cannot silently consume headroom. At 980 reads, the four-byte creation-time step
- * moves the share by 0.000467, within the existing 0.0005 tolerance around 29.8%.
+ * cannot silently consume headroom. At 965 reads, the four-byte creation-time step
+ * moves the share by 0.000460, within the existing 0.0005 tolerance around 29.8%.
  */
 const DOCUMENTED_SHARE = 0.298;
 const SHARE_TOLERANCE = 0.0005;
@@ -66,7 +66,7 @@ const SHARE_TOLERANCE = 0.0005;
  * bound change, which is the failure the ratchet exists to catch, and at 0.5% one would
  * still have absorbed the 42 bytes of unmaximal fields verification found.
  */
-const WORST_CASE_ROW_BYTES = 2547;
+const WORST_CASE_ROW_BYTES = 2587;
 
 /**
  * The only variation the measurement can legitimately show: `_creationTime` rendering as a
@@ -80,7 +80,7 @@ const STATES_COUNTED = 3;
 
 /**
  * `health` is `readHeartbeat` plus the three counts, and the heartbeat reads two documents
- * of its own — the settings row and the oldest waiting event. Two rows against 978 is
+ * of its own — the settings row and the oldest waiting event. Two rows against 963 is
  * immaterial, but the sum is presented as the whole cost of the call, so it should be.
  */
 const HEARTBEAT_DOCUMENTS = 2;
@@ -157,6 +157,7 @@ async function measureWorstCaseRow(): Promise<{ event: number; payload: number }
 
   // The optional fields too: a maximal row has all of them, and deleting any one shrinks it
   // while every assertion above stays true.
+  expect(row?.lastErrorCategory).toBe("payload_too_large");
   expect(row?.payloadId).toBeDefined();
   expect(row?.workId).toBeDefined();
   expect(row?.retry).toBeDefined();

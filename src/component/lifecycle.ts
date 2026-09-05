@@ -98,6 +98,7 @@ export const markAttemptFailed = internalMutation({
     await ctx.db.patch(eventId, {
       state: "pending",
       lastError: error,
+      lastErrorCategory: error.category,
       previousErrors: pushHistory(event.previousErrors, event.lastError),
       updatedAt: Date.now(),
     });
@@ -152,6 +153,7 @@ export const markFailed = internalMutation({
     await ctx.db.patch(eventId, {
       state: "failed",
       lastError: error,
+      lastErrorCategory: error.category,
       // The error being replaced is a real attempt's reason and must not simply vanish.
       // `onDeliveryComplete` has always moved it into the history; this path did not, so an
       // event that failed an attempt and then hit a terminal fault ended up reporting only
@@ -208,6 +210,7 @@ export const onDeliveryComplete = internalMutation({
       await ctx.db.patch(eventId, {
         state: "failed",
         lastError: error,
+        lastErrorCategory: error.category,
         // The attempt that actually failed is what an operator needs; `exhausted` only
         // says the budget ran out.
         previousErrors: pushHistory(event.previousErrors, event.lastError),
@@ -241,6 +244,7 @@ export const markPaused = internalMutation({
       await ctx.db.patch(eventId, {
         state: "pending",
         lastError: error,
+        lastErrorCategory: error.category,
         previousErrors: pushHistory(event.previousErrors, event.lastError),
         updatedAt: Date.now(),
       });

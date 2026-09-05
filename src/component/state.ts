@@ -171,6 +171,7 @@ export async function requeueDeadLetter(ctx: MutationCtx, event: Doc<"events">):
     // slots on a duplicate and evicting a real earlier failure a cycle early. It is also
     // untrue on its own terms: a replayed event is in flight, not failed.
     lastError: undefined,
+    lastErrorCategory: undefined,
     updatedAt: Date.now(),
   });
   await scheduleDelivery(ctx, event._id);

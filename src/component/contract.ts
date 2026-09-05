@@ -84,21 +84,21 @@ export const MAX_ERROR_HISTORY = 5;
 /**
  * How many rows per state `health` counts before answering "at least this many".
  *
- * `healthcost.test.ts` measures 2547 bytes for a maximally populated event row:
- * a 256-byte event id, six 200-byte errors, and every optional field present.
+ * `healthcost.test.ts` measures 2587 bytes for a maximally populated event row:
+ * a 256-byte event id, six 200-byte errors, the indexed error category, and all optional fields.
  * The caps count UTF-8 bytes, so multibyte strings cost no more than ASCII at the bound.
  * The payload lives separately and does not contribute to health reads.
  *
  * Three state counts each read cap + 1 rows. The heartbeat reads two more documents:
  * settings and the oldest waiting event. Thus the conservative cost is
- * `(3 * (cap + 1) + 2) * 2547` bytes against an 8 MiB read budget.
- * Target roughly 30% of that budget and round down to 325 rows per state:
+ * `(3 * (cap + 1) + 2) * 2587` bytes against an 8 MiB read budget.
+ * Target roughly 30% of that budget and round down to 320 rows per state:
  *
  * | cap | worst call | share of budget |
  * |---|---|---|
- * | 150 | 1.11 MiB | 13.8% |
- * | 325 | 2.38 MiB | 29.8% |
- * | 1000 | 7.30 MiB | 91.2% |
+ * | 150 | 1.12 MiB | 14.0% |
+ * | 320 | 2.38 MiB | 29.8% |
+ * | 1000 | 7.41 MiB | 92.7% |
  *
  * The test pins the row size and the documented share independently of the unchanged
  * 35% safety ceiling. Its JSON measurement slightly overestimates Convex storage for
@@ -107,7 +107,7 @@ export const MAX_ERROR_HISTORY = 5;
  * Capped indexed counts avoid writing a shared counter on every ingest transition.
  * `heartbeat` reads just two documents regardless of backlog and remains the polling API.
  */
-export const COUNT_CAP = 325;
+export const COUNT_CAP = 320;
 
 // ---------------------------------------------------------------------------- request policy
 
@@ -175,7 +175,7 @@ export const vFailureCategory = v.union(
 );
 export type FailureCategory = Infer<typeof vFailureCategory>;
 
-/** Sanitized: message ≤ 200 chars, never a response body, query string or token. */
+/** Sanitized: message ≤ 200 UTF-8 bytes, never a response body, query string or token. */
 export const vDeliveryError = v.object({
   category: vFailureCategory,
   httpStatus: v.optional(v.number()),
@@ -211,6 +211,7 @@ export const vErrorCode = v.union(
   v.literal("invalid_request_timeout"),
   v.literal("invalid_datasource"),
   v.literal("invalid_event_id"),
+  v.literal("category_index_not_ready"),
   v.literal("invalid_payload"),
   v.literal("payload_too_large"),
   v.literal("identity_conflict"),

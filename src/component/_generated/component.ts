@@ -246,7 +246,23 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       replayFailed: FunctionReference<
         "mutation",
         "internal",
-        { actor?: string; limit?: number },
+        {
+          actor?: string;
+          category?:
+            | "invalid_request"
+            | "quarantined"
+            | "not_found"
+            | "payload_too_large"
+            | "unauthorized"
+            | "rate_limited"
+            | "server_error"
+            | "timeout"
+            | "network"
+            | "exhausted"
+            | "stuck"
+            | "payload_missing";
+          limit?: number;
+        },
         { remaining: boolean; replayed: number },
         Name
       >;

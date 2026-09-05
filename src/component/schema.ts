@@ -3,6 +3,7 @@ import { v } from "convex/values";
 
 import {
   vDeliveryError,
+  vFailureCategory,
   vEventState,
   vOperatorAction,
   vPausedReason,
@@ -56,6 +57,8 @@ export const events = defineTable({
   updatedAt: v.number(),
   deliveredAt: v.optional(v.number()),
   lastError: v.optional(vDeliveryError),
+  /** Mirrors lastError.category for indexed operator replay. */
+  lastErrorCategory: v.optional(vFailureCategory),
   previousErrors: v.optional(v.array(vDeliveryError)),
   /** Workpool id of the live delivery item, when one is scheduled. */
   workId: v.optional(v.string()),
@@ -68,7 +71,8 @@ export const events = defineTable({
   // `by_state_createdAt` and filtering instead would let rows that already have work fill
   // the window and hide events behind them that genuinely need requeueing.
   .index("by_state_workId_createdAt", ["state", "workId", "createdAt"])
-  .index("by_state_updatedAt", ["state", "updatedAt"]);
+  .index("by_state_updatedAt", ["state", "updatedAt"])
+  .index("by_state_lastErrorCategory_updatedAt", ["state", "lastErrorCategory", "updatedAt"]);
 
 /**
  * The payload, one row per event, keyed by it.

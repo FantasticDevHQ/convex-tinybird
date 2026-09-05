@@ -214,6 +214,7 @@ export async function requeueAbandoned(
       // stranding path invisible in the first place.
       workId: undefined,
       updatedAt: Date.now(),
+      lastErrorCategory: "stuck",
       lastError: {
         category: "stuck" as const,
         message:

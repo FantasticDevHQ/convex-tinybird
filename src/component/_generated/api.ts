@@ -18,6 +18,7 @@ import type * as destination from "../destination.js";
 import type * as jwt from "../jwt.js";
 import type * as lib from "../lib.js";
 import type * as lifecycle from "../lifecycle.js";
+import type * as migrations from "../migrations.js";
 import type * as pool from "../pool.js";
 import type * as recovery from "../recovery.js";
 import type * as sanitize from "../sanitize.js";
@@ -41,6 +42,7 @@ const fullApi: ApiFromModules<{
   jwt: typeof jwt;
   lib: typeof lib;
   lifecycle: typeof lifecycle;
+  migrations: typeof migrations;
   pool: typeof pool;
   recovery: typeof recovery;
   sanitize: typeof sanitize;

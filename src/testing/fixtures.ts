@@ -62,6 +62,7 @@ export async function seedEvent(
   // noticed.
   const id = await ctx.db.insert("events", {
     ...event,
+    lastErrorCategory: event.lastError?.category,
     payloadBytes: utf8Length(payload),
     payloadHash: payloadFingerprint(payload),
   });

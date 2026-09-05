@@ -257,12 +257,12 @@ Fix the cause before replaying. This wrapper processes a bounded set of dead let
 
 ```ts
 export const operatorReplayFailed = mutation({
-  args: { actor: v.string() },
+  args: { actor: v.string(), category: v.optional(vFailureCategory) },
   returns: v.object({ replayed: v.number() }),
-  handler: async (ctx, { actor }) => {
+  handler: async (ctx, { actor, category }) => {
     let replayed = 0;
     for (let pass = 0; pass < 10; pass += 1) {
-      const result = await productEvents.replayFailed(ctx, { actor });
+      const result = await productEvents.replayFailed(ctx, { actor, category });
       replayed += result.replayed;
       if (!result.remaining) break;
     }
@@ -270,6 +270,25 @@ export const operatorReplayFailed = mutation({
   },
 });
 ```
+
+The wrapper imports `vFailureCategory` from `@fantastic-dev/convex-tinybird`. Pass an optional
+`category`, such as `quarantined`, to replay only that failure category. The index selects matching
+rows before applying the batch limit. `remaining` describes that category; omit the argument to
+replay all dead letters. Both paths order by last update so repeated failures go to the back.
+
+For an existing mount upgraded from a version without `lastErrorCategory`, backfill before using
+filtered replay. Run this from the host's backend directory, replacing `productEvents` with the
+mount name. It processes at most 100 rows per call without replaying events:
+
+```bash
+pnpm exec convex run --component productEvents migrations:backfillErrorCategories \
+  '{"limit":100,"cursor":null}'
+```
+
+Pass the returned `continueCursor` as `cursor` on the next call and repeat until
+`isDone` is true. Run it for each existing mount and deployment. Fresh mounts need no backfill.
+Filtered replay throws `category_index_not_ready` if failed rows still lack the indexed category,
+so an incomplete upgrade cannot look like an empty backlog. Unfiltered replay remains available.
 
 For a single inspected event:
 

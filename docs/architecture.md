@@ -209,15 +209,15 @@ any truncation ellipsis. Truncation preserves complete Unicode code points. Data
 remain limited to 128 ASCII characters by their validation pattern.
 
 `healthcost.test.ts` measures a maximally populated event with the largest ID, six error
-messages, and all optional fields. The row now measures **2547 bytes**, whether the bounded
+messages, the indexed category, and all optional fields. The row now measures **2587 bytes**, whether the bounded
 strings contain ASCII or multibyte text. Previously, UTF-16 length checks admitted a 5459-byte
 row with CJK text. The measurement uses JSON as a conservative proxy for Convex storage for
 this fixture, and pins the row size with a four-byte allowance for creation-time formatting.
 
 Three state counts each read one row past `COUNT_CAP`, and the heartbeat reads settings plus
 the oldest waiting event. The worst-case calculation is
-`(3 * (cap + 1) + 2) * 2547` bytes against an 8 MiB budget. Targeting roughly 30% of the budget
-and rounding down gives **325 rows per state**, or **2.38 MiB, 29.8%**. The test pins this
+`(3 * (cap + 1) + 2) * 2587` bytes against an 8 MiB budget. Targeting roughly 30% of the budget
+and rounding down gives **320 rows per state**, or **2.38 MiB, 29.8%**. The test pins this
 published percentage separately from the unchanged **35% safety ceiling**.
 
 The fixture includes every optional field, even combinations the state machine cannot produce,
@@ -265,12 +265,18 @@ five dead letters over three replay-and-drain cycles at `limit: 2`, two events h
 three times each and the other three had never been replayed at all. `resume` avoids the same trap
 a different way, by using an index that excludes rows which already have work.
 
-Replay walks the `failed` rows oldest first and takes no category filter. Requeuing is what moves
-that scan forward — a replayed row leaves the `failed` range, so the next call reads the rows
-behind it. A filter applied to the page after the read breaks that: rows that do not match stay
-`failed` at the front of the window, everything behind them becomes unreachable, and the call
-still reports that nothing remains. Filtering by category correctly means indexing it rather than
-filtering a page, which is tracked separately. To replay one specific event, use `replayEvent`.
+`replayFailed` accepts an optional failure `category`. With it, the component reads
+`by_state_lastErrorCategory_updatedAt`; without it, it reads `by_state_updatedAt`.
+Both take one row beyond the batch to answer `remaining` exactly for the selected range.
+No category predicate is applied after paging, so unrelated failures cannot hide matching
+rows. Every error transition maintains `lastErrorCategory` alongside `lastError`, including
+clearing both on replay and setting the recovery category on stuck events.
+
+Existing mounts must run the bounded `migrations:backfillErrorCategories` internal mutation
+before filtered replay. It scans bounded identity ranges and mirrors the current error category without
+replaying or deleting anything. A filtered call encountering an unindexed failed row throws
+`category_index_not_ready`; it does not claim there are no matching failures. Unfiltered
+replay remains available during the upgrade. The README gives the cursor loop.
 
 Replay reads and writes only `events` rows, never `payloads`, so its cost is the row count times
 independent of the payload. A host that raises `maxPayloadBytes` no longer has to lower `limit`:

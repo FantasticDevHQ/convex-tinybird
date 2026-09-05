@@ -1,4 +1,4 @@
-import { TinybirdDelivery } from "@fantastic-dev/convex-tinybird";
+import { TinybirdDelivery, vFailureCategory } from "@fantastic-dev/convex-tinybird";
 import { v } from "convex/values";
 
 import { components } from "./_generated/api";
@@ -77,12 +77,12 @@ export const operatorResume = mutation({
  * which is the half of the sample most likely to be wrong when copied.
  */
 export const operatorReplayFailed = mutation({
-  args: { actor: v.string() },
+  args: { actor: v.string(), category: v.optional(vFailureCategory) },
   returns: v.object({ replayed: v.number() }),
-  handler: async (ctx, { actor }) => {
+  handler: async (ctx, { actor, category }) => {
     let replayed = 0;
     for (let pass = 0; pass < 10; pass += 1) {
-      const result = await productEvents.replayFailed(ctx, { actor });
+      const result = await productEvents.replayFailed(ctx, { actor, category });
       replayed += result.replayed;
       if (!result.remaining) break;
     }
