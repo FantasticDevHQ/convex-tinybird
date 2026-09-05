@@ -1,17 +1,6 @@
-# A generic, duplicate-safe landing table for events delivered by the Convex component.
-#
-# The component guarantees AT-LEAST-ONCE delivery: an event Tinybird accepted whose
-# acknowledgement never reached the sender is indistinguishable from one never sent, so it is
-# sent again. That is a deliberate choice — the alternative loses events rather than
-# duplicating them — and it makes the engine here part of the contract rather than a detail.
-#
-# ReplacingMergeTree keyed on `event_id` collapses repeats. `version` decides which copy wins
-# when the same id arrives twice with different contents, so a corrected re-send supersedes the
-# original rather than racing it.
-#
-# The component sends the row VERBATIM: it never adds, renames or drops a column. The host owns
-# this schema. The only thing the component requires is that `event_id` equals the envelope's
-# `eventId`, because that is what makes a re-send the same row rather than a new one.
+# Host-owned reference schema. Keep event_id equal to the envelope eventId.
+# The component sends canonical payload columns unchanged and does not enforce this mapping.
+# ReplacingMergeTree removes repeated identities at merge time; the pipe also uses FINAL.
 
 SCHEMA >
     `event_id` String `json:$.event_id`,

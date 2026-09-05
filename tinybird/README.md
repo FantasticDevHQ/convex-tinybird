@@ -1,81 +1,54 @@
-# The Tinybird side of the contract
+# Generic Tinybird example
 
-Host-owned material, not component runtime code. The component sends a row **verbatim** and
-requires exactly one thing of the schema: `event_id` must equal the envelope's `eventId`.
-Everything else here is a choice a consumer can change.
+These resources belong to the host application. The component sends the host's payload as
+canonical NDJSON and does not inspect its column names. For this reference schema, the host
+sets `event_id` equal to the enqueue envelope's `eventId`. Other consumers can choose a different
+schema; the orders app in `../example` uses an `orders` datasource and different columns.
 
-## Why the engine is part of the contract
+## Duplicate-safe reads
 
-The component delivers **at least once**. An event Tinybird accepted whose acknowledgement never
-reached the sender is indistinguishable from one never sent, so it is sent again — deliberately,
-because the alternative loses events rather than duplicating them.
+Delivery is at least once: an accepted request can be retried when its acknowledgement is lost.
+Tinybird initially stores each delivery. `ReplacingMergeTree`, ordered by `event_id`, removes
+repeated identities during background merges. The pipe reads `events FINAL` so each identity
+contributes once even before those merges run.
 
-That makes duplicate handling Tinybird's job. `ReplacingMergeTree` sorted by `event_id` collapses
-repeats, and `version` decides which copy wins when the same id arrives with different contents,
-so a corrected re-send supersedes the original rather than racing it.
+Keep `occurred_at` stable for an identity so repeats stay in the same monthly partition. `version`
+selects the newest stored revision; equal-version retries must contain the same fact. The
+component rejects a changed payload for a retained `(datasource, eventId)` with `identity_conflict`,
+so setting a higher Tinybird version does not bypass the component's identity checks.
 
-## Dedupe happens at merge and read time, never on ingest
+The pipe accepts `start` and `end` with default bounds of 2000–2100. Its default result limit is
+100 event types, clamped to 1–1000. Hosts should select a narrower time window for their workload.
 
-This is the part that surprises people, so it is worth being blunt: **ingest does not
-deduplicate.** Three identical deliveries write three rows. They collapse when background merges
-run, on ClickHouse's schedule, which is why `events_by_type.pipe` says `FROM events FINAL` —
-`FINAL` resolves duplicates at query time instead of waiting.
+## Materialized views
 
-Measured on Tinybird Local via `smoke.sh`, one event sent three times:
+An additive materialized view over the raw table sees every insert, including retries. A later
+replacement merge cannot subtract duplicates already included in `count` or `sumState`.
+Do not use those raw additive aggregates for totals from this stream.
 
-```
-sent 3, raw rows 3, pipe counted 1
-PASS: duplicates stored (3 raw rows) and counted once by the pipe
-```
+For larger workloads, a host can use a scheduled copy pipe to populate a deduplicated table,
+then build materialized views from that table. The copy must replace its covered partitions or
+otherwise guarantee that each fact enters the aggregate once. Appending overlapping copy
+windows would reintroduce double counting. Corrections require an explicit rebuild or retraction
+strategy. Validate that pipeline separately; this example implements read-time deduplication only.
 
-The raw count is the control. Three rows physically present while the pipe returns one is what
-proves `FINAL` is doing the work; if merges had already collapsed everything, the pipe would
-return 1 regardless and the run would prove nothing. The script reports that case as
-INCONCLUSIVE rather than passing.
+## TypeScript SDK equivalent
 
-An earlier version of this file reported `raw rows 2` and explained it as a background merge
-arriving between the sends and the read. That explanation was wrong, and it is worth recording
-because the two causes are indistinguishable in a single sample. The 2 was **ingest lag** — the
-script read before the third row had landed. The two are told apart by direction, not by
-inspection: waiting longer moves an ingest-lag count UP (2s gives 2, 30s gives 3) and can only
-ever move a merge count DOWN. Believing the wrong one cost a real assertion, because it made
-`>= 2` look necessary when nothing ever required it.
-
-## Why additive materialized views are unsafe here
-
-A materialized view on the raw table sees **every insert**, including the duplicates, and it sees
-them once — at insert time, before any merge. So a view doing `sumState` or `count` over
-at-least-once data over-counts permanently, and no later merge repairs it: the duplicate was
-already folded into the aggregate.
-
-This is not a tuning problem. It is the reason the pipe reads with `FINAL` instead of being
-backed by a view.
-
-**The upgrade path**, when `FINAL` becomes too expensive:
-
-1. A **copy pipe** on a schedule reads `events FINAL` for a window and writes into a
-   deduplicated table.
-2. Materialized views hang off _that_ table, where every row is already unique.
-3. Queries read the views. `FINAL` is then paid once per window rather than once per query.
-
-The cost is freshness: the deduplicated table lags by the copy interval.
-
-## Using the TypeScript SDK
-
-Consumers who prefer to define these in code rather than as files can use
-[`@tinybirdco/sdk`](https://www.tinybird.co/docs). **Server-side only** — it holds an admin-scoped
-token and must never reach a browser.
+The following resource definitions match the datafiles and compile against
+`@tinybirdco/sdk@0.0.82`. Pin that exact version when using this example. The SDK is server-side
+infrastructure tooling and is not a dependency of the Convex component. Keep deployment tokens
+out of browser bundles. See the [SDK resource reference](https://www.tinybird.co/docs/forward/dev-reference/typescript-sdk-resources).
 
 ```ts
-import { defineDatasource, defineEndpoint, engine, node, t, p } from "@tinybirdco/sdk";
+import { defineDatasource, defineEndpoint, defineToken, engine, node, t, p } from "@tinybirdco/sdk";
 
 export const events = defineDatasource("events", {
   schema: {
     event_id: t.string(),
     event_type: t.string().lowCardinality(),
     occurred_at: t.dateTime64(3, "UTC"),
-    received_at: t.dateTime64(3, "UTC"),
-    version: t.uint32(),
+    received_at: t.dateTime64(3, "UTC").defaultExpr("now64(3)"),
+    version: t.uint32().default(1),
     payload: t.string(),
   },
   engine: engine.replacingMergeTree({
@@ -85,47 +58,47 @@ export const events = defineDatasource("events", {
   }),
 });
 
+export const eventsRead = defineToken("events_read");
+
 export const eventsByType = defineEndpoint("events_by_type", {
+  tokens: [{ token: eventsRead, scope: "READ" }],
   params: {
-    start: p.dateTime64(),
-    end: p.dateTime64(),
+    start: p.dateTime64().optional("2000-01-01 00:00:00.000"),
+    end: p.dateTime64().optional("2100-01-01 00:00:00.000"),
     limit: p.int32().optional(100),
   },
   nodes: [
     node({
-      name: "by_type",
+      name: "counts",
       sql: `SELECT event_type, count() AS events FROM events FINAL
-            WHERE occurred_at >= {{DateTime64(start)}} AND occurred_at < {{DateTime64(end)}}
-            GROUP BY event_type ORDER BY events DESC LIMIT {{Int32(limit, 100)}}`,
+            WHERE occurred_at >= {{DateTime64(start, '2000-01-01 00:00:00.000')}}
+              AND occurred_at < {{DateTime64(end, '2100-01-01 00:00:00.000')}}
+            GROUP BY event_type ORDER BY events DESC, event_type ASC
+            LIMIT least(greatest({{Int32(limit, 100)}}, 1), 1000)`,
     }),
   ],
   output: { event_type: t.string(), events: t.uint64() },
 });
 ```
 
-This snippet compiles against `@tinybirdco/sdk@0.0.82` under `tsc --strict`. The first draft of
-this file did not: it used a single-object form (`defineDatasource({ name, schema })`) that the
-SDK has never had, raw strings like `"String"` where `t.*()` validators are required, and an `sql`
-key on the endpoint that does not exist in `EndpointOptions` at all. Nothing here would have
-caught it — a fenced block in a README is compiled by no gate in this repo, and the shape was
-plausible enough to read as correct.
+TypeScript checks the SDK definitions; Tinybird checks the SQL when deploying. Revalidate both
+when changing this snippet or the datafiles.
 
-Be precise about what compiling buys, though, because it is less than it sounds. `sql` is an
-opaque string the compiler cannot see into, so it type-checks the SDK's shapes and nothing about
-the query. A later version of this block declared only `limit` while its SQL referenced
-`{{DateTime64(start)}}` and `{{DateTime64(end)}}` — undeclared parameters, compiling cleanly,
-failing at deploy. Tinybird is the only thing that checks the SQL. If you change either, compile
-it AND deploy it.
+## Local smoke test
 
-## Running the smoke test
-
-Needs Docker; not run in CI.
+Install Docker and the `tb` CLI, then run from the component directory:
 
 ```bash
 ./tinybird/smoke.sh
 ```
 
-It starts Tinybird Local, deploys, sends one event three times and asserts the pipe counts it
-once **and** that duplicates were physically stored. Use `tb deploy`, not `tb build` — a build is
-ephemeral and the workspace's endpoints cannot see it, which presents as a 404 on ingest rather
-than as the wrong verb.
+The script creates a disposable Tinybird Local container on port 7181 and runs `tb deploy`.
+It sends `fixtures/event.ndjson` three times and requires both three raw rows and a pipe count of
+one. If background merges win the race, the test reports INCONCLUSIVE and fails so it cannot
+claim to have exercised `FINAL` without physical duplicates. It then inserts 1001 more event
+types and checks default, excessive, zero, negative, and single-row limits. The container is
+removed on exit. No cloud credentials are needed.
+
+The Vitest datasource test enqueues the same fixture through the component, captures delivery,
+and checks its canonical NDJSON against the datasource columns. This links the serialization
+check to the sample ingested by the smoke test.

@@ -1,14 +1,5 @@
-# Counts events per type in a window, counting each `event_id` ONCE.
-#
-# `FINAL` is what makes that true. ReplacingMergeTree collapses duplicates when parts merge,
-# and merges happen on their own schedule — so a plain `count()` over the raw table returns a
-# number that drifts downward as background merges catch up. `FINAL` resolves the duplicates at
-# read time instead, which is why an at-least-once source needs it and an exactly-once source
-# would not.
-#
-# The cost is real: `FINAL` reads and merges at query time. For dashboards over a bounded window
-# it is the right trade; for high-cardinality scans it is not, and `tinybird/README.md` records
-# the upgrade path.
+# Count each event_id once before aggregating, even before background merges.
+# FINAL has a query-time cost; hosts should choose an appropriate time window.
 
 TOKEN "events_read" READ
 
@@ -22,7 +13,7 @@ SQL >
     WHERE occurred_at >= {{DateTime64(start, '2000-01-01 00:00:00.000')}}
       AND occurred_at < {{DateTime64(end, '2100-01-01 00:00:00.000')}}
     GROUP BY event_type
-    ORDER BY events DESC
-    LIMIT {{Int32(limit, 100)}}
+    ORDER BY events DESC, event_type ASC
+    LIMIT least(greatest({{Int32(limit, 100)}}, 1), 1000)
 
 TYPE endpoint
