@@ -1,0 +1,9 @@
+import tinybird from "@fantastic-dev/convex-tinybird/convex.config";
+import { defineApp } from "convex/server";
+
+const app = defineApp();
+app.use(tinybird, {
+  name: "ticketAnalytics",
+  env: { TINYBIRD_TOKEN: process.env.TINYBIRD_TOKEN, TINYBIRD_HOST: process.env.TINYBIRD_HOST },
+});
+export default app;

@@ -1,0 +1,48 @@
+import { register } from "@fantastic-dev/convex-tinybird/test";
+import { convexTest } from "convex-test";
+import { afterEach, expect, it, vi } from "vitest";
+import { api } from "./convex/_generated/api";
+import schema from "./convex/schema";
+
+const modules = import.meta.glob("./convex/**/*.ts");
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
+it("delivers a ticket from the packed component and keeps host tenancy private", async () => {
+  vi.useFakeTimers();
+  vi.stubEnv("TINYBIRD_TOKEN", "p.clean-consumer-synthetic");
+  vi.stubEnv("TINYBIRD_HOST", "https://api.tinybird.co");
+  const fetchStub = vi.fn(async (url: string, init: RequestInit) => {
+    expect(new URL(url).origin).toBe("https://api.tinybird.co");
+    expect(new URL(url).searchParams.get("name")).toBe("tickets");
+    expect(new Headers(init.headers).get("authorization")).toBe(
+      "Bearer p.clean-consumer-synthetic",
+    );
+    return new Response(JSON.stringify({ successful_rows: 1, quarantined_rows: 0 }), {
+      status: 200,
+    });
+  });
+  vi.stubGlobal("fetch", fetchStub);
+  const t = convexTest({ schema, modules, transactionLimits: true });
+  register(t, "ticketAnalytics");
+  const owner = t.withIdentity({ subject: "workspace-owner-a" });
+  const outsider = t.withIdentity({ subject: "workspace-owner-b" });
+  const ticketId = await owner.mutation(api.tickets.open, { subject: "Printer offline" });
+  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  expect(fetchStub).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(String(fetchStub.mock.calls[0][1].body))).toEqual({
+    ticket_id: ticketId,
+    workspace_key: "workspace-owner-a",
+    subject: "Printer offline",
+  });
+  expect(await owner.query(api.tickets.status, { ticketId })).toMatchObject({ state: "delivered" });
+  await expect(outsider.query(api.tickets.status, { ticketId })).rejects.toThrow(
+    "Ticket not found",
+  );
+  await expect(t.mutation(api.tickets.open, { subject: "Anonymous" })).rejects.toThrow(
+    "Sign in required",
+  );
+});

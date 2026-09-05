@@ -1,0 +1,41 @@
+import { TinybirdDelivery } from "@fantastic-dev/convex-tinybird";
+import { v } from "convex/values";
+import { components } from "./_generated/api";
+import { mutation, query } from "./_generated/server";
+
+const analytics = new TinybirdDelivery(components.ticketAnalytics);
+
+export const open = mutation({
+  args: { subject: v.string() },
+  returns: v.id("tickets"),
+  handler: async (ctx, { subject }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Sign in required");
+    // This sample's workspaces belong to individual principals. The component knows
+    // nothing about this host's identity policy, tickets table or workspaceKey field.
+    const workspaceKey = identity.subject;
+    const ticketId = await ctx.db.insert("tickets", {
+      workspaceKey,
+      subject,
+      openedAt: Date.now(),
+    });
+    await analytics.enqueue(ctx, {
+      datasource: "tickets",
+      eventId: `${ticketId}:opened`,
+      payload: { ticket_id: ticketId, workspace_key: workspaceKey, subject },
+    });
+    return ticketId;
+  },
+});
+
+export const status = query({
+  args: { ticketId: v.id("tickets") },
+  returns: v.any(),
+  handler: async (ctx, { ticketId }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    const ticket = await ctx.db.get(ticketId);
+    if (!identity || !ticket || ticket.workspaceKey !== identity.subject)
+      throw new Error("Ticket not found");
+    return analytics.status(ctx, { datasource: "tickets", eventId: `${ticketId}:opened` });
+  },
+});

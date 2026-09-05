@@ -1,0 +1,17 @@
+import { defineConfig } from "vitest/config";
+export default defineConfig({
+  test: {
+    environment: "node",
+    include: ["consumer.test.ts"],
+    server: {
+      deps: {
+        inline: [
+          "@fantastic-dev/convex-tinybird",
+          "@convex-dev/workpool",
+          "@convex-dev/batch-worker",
+          "convex-test",
+        ],
+      },
+    },
+  },
+});
