@@ -60,6 +60,11 @@ did not reach the deployment and every enqueue will sit there silently.
 deployment and regenerates `convex/_generated`, which is committed. It also regenerates the
 component's `_generated` files through the host app that mounts it.
 
+The host stores unfinished recovery cursors in `maintenanceCursors`, separately for each mount.
+Each maintenance invocation processes one recovery page and one cleanup page per stream. Later
+cron runs continue the saved scan; when it finishes, the next run starts a new scan. Do not wrap
+many component calls in one host mutation: their read budgets share the parent transaction.
+
 ## Files
 
 | Path                      | Why it exists                                                       |

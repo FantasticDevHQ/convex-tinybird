@@ -24,7 +24,7 @@ function jsonResponse(status: number, body: unknown): Response {
  * without which the first enqueue would fail the moment it scheduled work.
  */
 function setup() {
-  const t = convexTest(schema, modules);
+  const t = convexTest({ schema, modules, transactionLimits: true });
   register(t, "productEvents");
   register(t, "auditEvents");
   return t;
@@ -266,6 +266,34 @@ describe("adopting the component in an unrelated app", () => {
     expect(await stillThere("productEvents")).toBe(false);
     expect(await stillThere("auditEvents")).toBe(false);
   });
+
+  it("commits bounded cleanup progress with hundreds of large retained payloads", async () => {
+    acceptEverything();
+    const t = setup();
+    for (let i = 0; i < 400; i += 1) {
+      await t.mutation(components.productEvents.lib.enqueue, {
+        datasource: "large_events",
+        eventId: `large-${i}`,
+        payload: { body: "x".repeat(60 * 1024) },
+      });
+      if (i % 50 === 49) await t.finishAllScheduledFunctions(vi.runAllTimers);
+    }
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.setSystemTime(Date.now() + 8 * 24 * 60 * 60 * 1000);
+    const status = (eventId: string) =>
+      t.query(components.productEvents.lib.getStatus, {
+        datasource: "large_events",
+        eventId,
+      });
+    expect(await status("large-0")).toMatchObject({ state: "delivered" });
+    await t.mutation(internal.maintenance.maintain, {});
+    expect(await status("large-0")).toBeNull();
+    expect(await status("large-399")).toMatchObject({ state: "delivered" });
+    for (let pass = 0; pass < 20; pass += 1) {
+      await t.mutation(internal.maintenance.maintain, {});
+    }
+    expect(await status("large-399")).toBeNull();
+  }, 30000);
 
   it("reports each stream separately through the host's own health wrapper", async () => {
     // `api.orders.health` is the operator-facing surface and had no coverage at all: a wrapper
