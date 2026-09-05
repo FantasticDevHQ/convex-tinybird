@@ -127,8 +127,9 @@ export const enqueue = mutation({
       throw new ConvexError({ code: "invalid_datasource" as const, datasource: args.datasource });
     }
     const eventId = args.eventId;
-    if (eventId.trim() === "" || eventId.length > MAX_EVENT_ID_LENGTH) {
-      throw new ConvexError({ code: "invalid_event_id" as const, length: eventId.length });
+    const eventIdBytes = utf8Length(eventId);
+    if (eventId.trim() === "" || eventIdBytes > MAX_EVENT_ID_LENGTH) {
+      throw new ConvexError({ code: "invalid_event_id" as const, length: eventIdBytes });
     }
     if (args.requestTimeoutMs !== undefined) {
       const { min, max } = REQUEST_TIMEOUT_RANGE_MS;

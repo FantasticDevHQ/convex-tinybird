@@ -19,7 +19,7 @@ export const DEFAULT_MAX_PAYLOAD_BYTES = 65_536;
  * document limit and Tinybird's per-request limits even after canonicalisation.
  */
 export const HARD_MAX_PAYLOAD_BYTES = 524_288;
-/** Event identity length bound; identities are host-provided opaque strings. */
+/** Event identity UTF-8 byte bound; identities are host-provided opaque strings. */
 export const MAX_EVENT_ID_LENGTH = 256;
 /** Longest Tinybird datasource name this component accepts. */
 export const MAX_DATASOURCE_NAME_LENGTH = 128;
@@ -82,60 +82,32 @@ export const DEFAULT_RESUME_LIMIT = 100;
 export const MAX_ERROR_HISTORY = 5;
 
 /**
- * How many rows per state `health` will count before answering "at least this many".
+ * How many rows per state `health` counts before answering "at least this many".
  *
- * Sized from a MEASURED row, not an estimated one. `healthcost.test.ts` builds the largest
- * event the contract permits — every string at its documented maximum, every optional field
- * present, and every capped string filled with the costliest characters those caps admit —
- * and it comes to about 5.4 KB. `health` counts three states and reads one row past the cap
- * in each, and `readHeartbeat` reads two more — the settings row and the oldest waiting
- * event, the latter being the same document the pending count reads first, which Convex
- * charges twice because it accumulates per read rather than per document. So the worst call
- * is `(3 x (cap + 1) + 2) x 5.4 KB` against Convex's roughly 8 MiB per-call budget.
- * `healthcost.test.ts` pins the 29.6% figure below as well as the row size, so raising the
- * cap has to come here even while it would still be safe:
+ * `healthcost.test.ts` measures 2547 bytes for a maximally populated event row:
+ * a 256-byte event id, six 200-byte errors, and every optional field present.
+ * The caps count UTF-8 bytes, so multibyte strings cost no more than ASCII at the bound.
+ * The payload lives separately and does not contribute to health reads.
+ *
+ * Three state counts each read cap + 1 rows. The heartbeat reads two more documents:
+ * settings and the oldest waiting event. Thus the conservative cost is
+ * `(3 * (cap + 1) + 2) * 2547` bytes against an 8 MiB read budget.
+ * Target roughly 30% of that budget and round down to 325 rows per state:
  *
  * | cap | worst call | share of budget |
  * |---|---|---|
- * | 1000 | 15.65 MiB | 195.6% |
- * | 250 | 3.93 MiB | 49.1% |
- * | 150 | 2.37 MiB | 29.6% |
+ * | 150 | 1.11 MiB | 13.8% |
+ * | 325 | 2.38 MiB | 29.8% |
+ * | 1000 | 7.30 MiB | 91.2% |
  *
- * That shape is a UNION of every field's maximum, deliberately including combinations the
- * state machine cannot produce — `deliveredAt` is only ever written alongside
- * `state: "delivered"`, which `health` does not count, so no counted row can carry both.
- * An upper bound that is provably unreachable is a better bound than a realistic one.
- * The shape is not far from realistic either: a sustained outage produces exactly that
- * many failed events each carrying a full failure history, which is why the worst case
- * and the case an operator reaches for `health` in are close to the same case.
+ * The test pins the row size and the documented share independently of the unchanged
+ * 35% safety ceiling. Its JSON measurement slightly overestimates Convex storage for
+ * this fixture; all optional fields are included even when their combination is unreachable.
  *
- * Note what "largest the contract permits" had to mean. Every length cap here counts UTF-16
- * code units while Convex sizes a string by its UTF-8 bytes, so the most expensive string a
- * cap admits is not ASCII — a BMP character outside Latin-1 is one unit and three bytes, the
- * worst ratio available. An ASCII fixture measures 2458 bytes for this row and a truthful
- * one measures 5459, which is most of the gap against the 2.1 KB the ticket had estimated.
- * Capping those strings in bytes instead would let this constant rise again; that is
- * FTD-2600.
- *
- * The measurement uses `JSON.stringify` as a proxy for Convex's own document sizing, which
- * over-states it by roughly 4%: JSON spends two quotes per field name and a comma between
- * fields where Convex spends one and none. So these figures err towards caution.
- *
- * This was unreachable before FTD-2525. The payload used to sit on the event row, so a call
- * died on bytes at roughly 130 events and the cap never came into play. Removing the payload
- * fixed that and made the cap the thing that binds.
- *
- * **Why lower the cap rather than change the mechanism.** Two alternatives were considered.
- * Counting one state per call would make the host ask three times, moving the cost rather
- * than removing it and changing the API for every caller. Maintained counters on the
- * settings row would make a count one document, but every transition would then write to
- * that single row, trading a read bound for write contention on the hot path — a worse
- * trade for a component whose whole job is ingest. Lowering the cap costs only precision in
- * an answer that is already deliberately imprecise: `capped: true` means "more than this",
- * and an operator acts the same on 150 as on 1000. `oldestPendingAgeMs` from `heartbeat`
- * tells them the severity, and it reads two documents whatever the backlog.
+ * Capped indexed counts avoid writing a shared counter on every ingest transition.
+ * `heartbeat` reads just two documents regardless of backlog and remains the polling API.
  */
-export const COUNT_CAP = 150;
+export const COUNT_CAP = 325;
 
 // ---------------------------------------------------------------------------- request policy
 

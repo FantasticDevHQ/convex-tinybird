@@ -202,48 +202,28 @@ practice rather than in theory.
 `health` counts unfinished work per state through `by_state_createdAt`, stopping at `COUNT_CAP`,
 and reads one further row for the oldest waiting event. That bounds the number of **documents**.
 
-It bounds the **bytes** as well, but only since FTD-2525. Convex returns whole documents, so
-while the payload lived on the event row the cost of a capped read was `rows x event size`
-rather than `rows`: at the component's default 64 KiB payload bound a `health` call failed at
-roughly 130 unfinished events, and at the 512 KiB hard cap at about 16 — the query whose whole
-purpose was to stay cheap, failing outright on exactly the backlog it exists to report. The
-payload now lives in `payloads`, keyed by event and read only when delivering and when
-comparing a duplicate, so an event row costs the same whatever the event carries — bounded at
-about 5.4 KB by the contract's own caps, and typically far less — and the row
-cap is once again the thing that binds.
+The payload lives in a separate `payloads` table, so it does not contribute to health reads.
+`eventId` is limited to **256 UTF-8 bytes** and an oversized ID is rejected with
+`invalid_event_id`. Each stored error message is limited to **200 UTF-8 bytes**, including
+any truncation ellipsis. Truncation preserves complete Unicode code points. Datasource names
+remain limited to 128 ASCII characters by their validation pattern.
 
-That made the cap reachable for the first time, and FTD-2530 then sized it from a measured row
-rather than an estimated one. `healthcost.test.ts` builds the largest event the contract permits —
-`eventId` at 256, `datasource` at 128, `lastError` and a full `previousErrors` of 200-character
-messages, every optional field present — and it comes to about 5.4 KB, not the 2.1 KB the estimate
-had assumed.
+`healthcost.test.ts` measures a maximally populated event with the largest ID, six error
+messages, and all optional fields. The row now measures **2547 bytes**, whether the bounded
+strings contain ASCII or multibyte text. Previously, UTF-16 length checks admitted a 5459-byte
+row with CJK text. The measurement uses JSON as a conservative proxy for Convex storage for
+this fixture, and pins the row size with a four-byte allowance for creation-time formatting.
 
-Most of that gap is one thing. Every length cap here counts UTF-16 code units while Convex sizes a
-string by its UTF-8 bytes, so the most expensive string a cap admits is not ASCII: a BMP character
-outside Latin-1 is one unit and three bytes, the worst ratio available. Filled with ASCII the same
-row measures 2458 bytes; filled truthfully it measures 5459. Bounding those strings in bytes would
-let the cap rise again, which is FTD-2600.
+Three state counts each read one row past `COUNT_CAP`, and the heartbeat reads settings plus
+the oldest waiting event. The worst-case calculation is
+`(3 * (cap + 1) + 2) * 2547` bytes against an 8 MiB budget. Targeting roughly 30% of the budget
+and rounding down gives **325 rows per state**, or **2.38 MiB, 29.8%**. The test pins this
+published percentage separately from the unchanged **35% safety ceiling**.
 
-`health` counts three states and reads one row past the cap in each, so the worst call is
-`(3 x (cap + 1) + 2) x 5.4 KB` — the two being `readHeartbeat`'s settings row and oldest waiting
-event. At the old cap of 1000 that was 15.5 MiB, **nearly twice the ~8 MiB budget**; at 150 it is
-2.37 MiB, 29.6%.
-
-That shape is not hypothetical: a sustained outage produces exactly that many failed rows each
-carrying a full history, so the worst case and the case an operator reaches for `health` in are
-the same case — which is why the margin is large rather than merely sufficient. `heartbeat` reads
-two documents whatever the backlog and is unaffected, which is why it is what a monitor should
-poll.
-
-The cap was lowered rather than the mechanism changed. Counting one state per call would make the
-host ask three times, moving the cost instead of removing it. Maintained counters would make a
-count one document, but every transition would then write to a single row, trading a read bound
-for write contention on the ingest path. Lowering the cap costs only precision in an answer that
-is already deliberately imprecise.
-
-That failure was a property of the schema, and moving the payload out of the row is what fixed
-it. Doing so exposed the cap underneath, which needed a smaller number as well — the two are
-successive constraints, not competing explanations.
+The fixture includes every optional field, even combinations the state machine cannot produce,
+to keep the estimate conservative. A sustained outage can fill the error history on many rows,
+so health needs this headroom when the backlog grows. Indexed capped counts also avoid updating
+a shared counter on every ingest transition.
 
 `heartbeat` predates that fix and stays. It returns the same fields minus the counts and reads
 exactly two documents — the settings row and the oldest waiting event — so `paused` and

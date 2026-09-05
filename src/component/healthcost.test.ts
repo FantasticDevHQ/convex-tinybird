@@ -33,23 +33,11 @@ const READ_BUDGET_BYTES = 8 * 1024 * 1024;
 const BUDGET_SHARE = 0.35;
 
 /**
- * The share it actually occupies, as documented on `COUNT_CAP`.
- *
- * The tolerance is 0.0005, which is about twice what the four-byte row step can move the
- * share (455 documents x 4 bytes is 0.02 of a point). It was 0.002 and that was too loose:
- * it absorbed a published figure that was simply wrong — 29.7% where the arithmetic gives
- * 29.6% — so the change detector stayed green while both documents printed a false number.
- * That is the fourth time on this component a margin has swallowed the thing it was there
- * to catch.
- *
- * Pinned separately from the ceiling because the two say different things. The ceiling is a
- * safety bound with deliberate headroom, so it does not notice a change that stays inside
- * it: at 29.4% actual against a 35% ceiling the cap could be raised from 150 to about 178
- * in silence, and verification measured that slack at an earlier stage too. This pins the
- * combination of cap and row against the number the docblock publishes, so either moving
- * has to come here.
+ * Pin the published share separately from the 35% safety ceiling, so a cap change
+ * cannot silently consume headroom. At 980 reads, the four-byte creation-time step
+ * moves the share by 0.000467, within the existing 0.0005 tolerance around 29.8%.
  */
-const DOCUMENTED_SHARE = 0.296;
+const DOCUMENTED_SHARE = 0.298;
 const SHARE_TOLERANCE = 0.0005;
 
 /**
@@ -78,7 +66,7 @@ const SHARE_TOLERANCE = 0.0005;
  * bound change, which is the failure the ratchet exists to catch, and at 0.5% one would
  * still have absorbed the 42 bytes of unmaximal fields verification found.
  */
-const WORST_CASE_ROW_BYTES = 5459;
+const WORST_CASE_ROW_BYTES = 2547;
 
 /**
  * The only variation the measurement can legitimately show: `_creationTime` rendering as a
@@ -92,7 +80,7 @@ const STATES_COUNTED = 3;
 
 /**
  * `health` is `readHeartbeat` plus the three counts, and the heartbeat reads two documents
- * of its own — the settings row and the oldest waiting event. Two rows against 453 is
+ * of its own — the settings row and the oldest waiting event. Two rows against 978 is
  * immaterial, but the sum is presented as the whole cost of the call, so it should be.
  */
 const HEARTBEAT_DOCUMENTS = 2;
@@ -107,12 +95,9 @@ const HEARTBEAT_DOCUMENTS = 2;
  */
 async function measureWorstCaseRow(): Promise<{ event: number; payload: number }> {
   const t = setup("");
-  // Every length cap in this contract counts UTF-16 code units, but Convex sizes a string
-  // by its UTF-8 bytes. So the most expensive string a cap admits is not ASCII: a BMP
-  // character outside Latin-1 is one code unit and three bytes, which is the worst ratio
-  // available. An emoji is worse per character but cheaper per unit — two units, four bytes
-  // — so it buys less under a length cap. An ASCII fixture measures a third of the truth.
-  const fill = (units: number) => "\u4e2d".repeat(units);
+  // Fill the exact byte bound with multibyte text plus ASCII padding. CJK and ASCII
+  // now cost the same at the bound; character count no longer inflates the row.
+  const fill = (bytes: number) => "中".repeat(Math.floor(bytes / 3)) + "x".repeat(bytes % 3);
   const error = (i: number) => ({
     // The longest member of the category union.
     category: "payload_too_large" as const,
@@ -163,15 +148,11 @@ async function measureWorstCaseRow(): Promise<{ event: number; payload: number }
   const messages = [row?.lastError, ...(row?.previousErrors ?? [])];
   expect(messages).toHaveLength(MAX_ERROR_HISTORY + 1);
   for (const error of messages) {
-    expect(error?.message).toHaveLength(MAX_ERROR_MESSAGE_LENGTH);
-    // Length is not size. Asserting only the length is how an ASCII fixture passes for a
-    // maximal one, so the byte cost is asserted too.
-    expect(Buffer.byteLength(error?.message ?? "", "utf8")).toBe(MAX_ERROR_MESSAGE_LENGTH * 3);
+    expect(Buffer.byteLength(error?.message ?? "", "utf8")).toBe(MAX_ERROR_MESSAGE_LENGTH);
     expect(error?.httpStatus).toBeDefined();
   }
 
-  expect(row?.eventId).toHaveLength(MAX_EVENT_ID_LENGTH);
-  expect(Buffer.byteLength(row?.eventId ?? "", "utf8")).toBe(MAX_EVENT_ID_LENGTH * 3);
+  expect(Buffer.byteLength(row?.eventId ?? "", "utf8")).toBe(MAX_EVENT_ID_LENGTH);
   expect(row?.datasource).toHaveLength(MAX_DATASOURCE_NAME_LENGTH);
 
   // The optional fields too: a maximal row has all of them, and deleting any one shrinks it
@@ -192,10 +173,8 @@ async function measureWorstCaseRow(): Promise<{ event: number; payload: number }
   // numbers are guaranteed to describe the SAME event. `reclaimOrphanedPayloads` reads both
   // per scanned row, and a pair measured from separate seeds could silently drift apart.
   //
-  // Note the fill here is ASCII while the event row's is CJK, and that is not an oversight:
-  // `HARD_MAX_PAYLOAD_BYTES` is a BYTE bound, so one ASCII character is exactly one byte of
-  // it and the string is already maximal. The event row's caps count UTF-16 code units,
-  // where ASCII buys a third of the bytes the cap admits.
+  // Both payload and event strings are byte bounded. ASCII and CJK fixtures consume
+  // the same storage at their respective bounds.
   const stored = await t.run(async (ctx) => ctx.db.query("payloads").first());
   expect(Buffer.byteLength(stored?.payload ?? "", "utf8")).toBe(HARD_MAX_PAYLOAD_BYTES);
 

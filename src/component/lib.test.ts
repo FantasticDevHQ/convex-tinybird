@@ -266,6 +266,8 @@ describe("enqueue", () => {
     ["invalid_datasource", { datasource: "", eventId: "evt_1", payload: row }],
     ["invalid_event_id", { datasource: "events", eventId: "   ", payload: row }],
     ["invalid_event_id", { datasource: "events", eventId: "x".repeat(257), payload: row }],
+    ["invalid_event_id", { datasource: "events", eventId: "中".repeat(86), payload: row }],
+    ["invalid_event_id", { datasource: "events", eventId: "😀".repeat(65), payload: row }],
     ["invalid_payload", { datasource: "events", eventId: "evt_1", payload: "not an object" }],
     ["invalid_payload", { datasource: "events", eventId: "evt_1", payload: { a: Number.NaN } }],
     [
@@ -287,6 +289,17 @@ describe("enqueue", () => {
     expect(await codeOf(t.mutation(api.lib.enqueue, args as never))).toBe(expected);
     expect(await t.run((ctx) => ctx.db.query("events").take(10))).toEqual([]);
   });
+
+  it.each(["x".repeat(256), "中".repeat(85) + "x", "😀".repeat(64)])(
+    "accepts an event id at the exact UTF-8 byte bound",
+    async (eventId) => {
+      const t = unconfigured();
+      expect(Buffer.byteLength(eventId, "utf8")).toBe(256);
+      expect(
+        await t.mutation(api.lib.enqueue, { datasource: "events", eventId, payload: row }),
+      ).toMatchObject({ outcome: "enqueued" });
+    },
+  );
 
   it("never lets a host raise the payload bound above the hard cap", async () => {
     const t = unconfigured();

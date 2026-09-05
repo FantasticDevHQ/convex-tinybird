@@ -24,8 +24,39 @@ describe("sanitizeMessage", () => {
 
   it("truncates a hostile upstream message and marks the cut", () => {
     const result = sanitizeMessage("x".repeat(5_000));
-    expect(result).toHaveLength(MAX_ERROR_MESSAGE_LENGTH);
+    expect(Buffer.byteLength(result, "utf8")).toBe(MAX_ERROR_MESSAGE_LENGTH);
     expect(result.endsWith("…")).toBe(true);
+  });
+
+  it.each([
+    ["中".repeat(100), "中".repeat(65) + "…"],
+    ["😀".repeat(100), "😀".repeat(49) + "…"],
+    ["x".repeat(196) + "😀" + "suffix", "x".repeat(196) + "…"],
+    ["x".repeat(194) + "中" + "suffix", "x".repeat(194) + "中…"],
+  ])("truncates at a complete code point within the byte bound", (input, expected) => {
+    const result = sanitizeMessage(input);
+    expect(result).toBe(expected);
+    expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(MAX_ERROR_MESSAGE_LENGTH);
+    expect(new TextDecoder("utf-8", { fatal: true }).decode(new TextEncoder().encode(result))).toBe(
+      result,
+    );
+  });
+
+  it.each(["x".repeat(200), "中".repeat(66) + "xx", "😀".repeat(50)])(
+    "preserves messages at the exact byte bound",
+    (message) => expect(sanitizeMessage(message)).toBe(message),
+  );
+
+  it.each([
+    ["bad \ud800 name", "bad � name"],
+    ["\udc00" + "x".repeat(300), "�" + "x".repeat(194) + "…"],
+  ])("normalizes lone surrogates before applying the byte bound", (input, expected) => {
+    const result = sanitizeMessage(input);
+    expect(result).toBe(expected);
+    expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(MAX_ERROR_MESSAGE_LENGTH);
+    expect(new TextDecoder("utf-8", { fatal: true }).decode(new TextEncoder().encode(result))).toBe(
+      result,
+    );
   });
 
   it("redacts before truncating, so a token near the end cannot survive", () => {

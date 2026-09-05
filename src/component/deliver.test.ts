@@ -153,6 +153,25 @@ describe("outcomes", () => {
     expect(message.length).toBeLessThanOrEqual(200);
   });
 
+  it("stores multibyte transport errors within the UTF-8 byte bound", async () => {
+    const error = new Error("transport failed");
+    error.name = "😀中".repeat(100);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(error));
+    const t = setup();
+
+    await enqueueOne(t);
+    await drain(t);
+
+    const stored = await statusOf(t);
+    const message = stored?.lastError?.message ?? "";
+    expect(message).toContain("😀中");
+    expect(message.endsWith("…")).toBe(true);
+    expect(Buffer.byteLength(message, "utf8")).toBeLessThanOrEqual(200);
+    expect(
+      new TextDecoder("utf-8", { fatal: true }).decode(new TextEncoder().encode(message)),
+    ).toBe(message);
+  });
+
   it("fails the event when Tinybird returns a status this layer does not handle", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(503, null)));
     const t = setup();

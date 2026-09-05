@@ -155,6 +155,10 @@ await productEvents.enqueue(ctx, {
 });
 ```
 
+`eventId` must be nonblank and at most **256 UTF-8 bytes**. Oversized IDs are rejected with
+`invalid_event_id`. Stored error messages are limited to **200 UTF-8 bytes**, including the
+truncation ellipsis, with cuts only between complete Unicode code points.
+
 Identity is `(datasource, eventId)` within one mount. An identical retained payload returns a
 duplicate result without scheduling another delivery. A different payload under that identity
 throws `identity_conflict`. Payloads are canonicalized and bounded: 64 KiB by default and
