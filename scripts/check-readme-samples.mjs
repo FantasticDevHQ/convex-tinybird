@@ -20,6 +20,8 @@
  * collected eight — and still returned no failures, so the weakening was invisible. That is the
  * shape of a control that stays green for every value: it shipped looking like a strengthening.
  */
+import { checkExampleReferences } from "./check-example-references.mjs";
+
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -207,6 +209,7 @@ export function checkReadmeSamples(root) {
     }
   }
 
+  failures.push(...checkExampleReferences(root, readme, blocks));
   return failures;
 }
 

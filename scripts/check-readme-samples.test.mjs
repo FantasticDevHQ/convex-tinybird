@@ -16,7 +16,10 @@ function copyPackage() {
       recursive: true,
       // `node_modules` holds a workspace symlink back to this package, so copying it recurses
       // until the path is too long for the filesystem. Excluding it is not an optimisation.
-      filter: (source) => !source.split(sep).includes("node_modules"),
+      filter: (source) =>
+        !source
+          .split(sep)
+          .some((part) => part === "node_modules" || part === ".convex" || part.startsWith(".env")),
     });
   }
   return dir;
@@ -51,8 +54,9 @@ test("fails when the example stops demonstrating a documented operation", () => 
     writeFileSync(ops, readFileSync(ops, "utf8").replace(/\.replayFailed\(/u, ".notReplayFailed("));
 
     const failures = checkReadmeSamples(dir);
-    assert.equal(failures.length, 1, failures.join("\n"));
-    assert.match(failures[0], /replayFailed/u);
+    assert.equal(failures.length, 2, failures.join("\n"));
+    assert.ok(failures.some((failure) => /replayFailed/u.test(failure)));
+    assert.ok(failures.some((failure) => /excerpt does not match/u.test(failure)));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -296,6 +300,61 @@ test("the parsed client surface is exactly the 11 async methods", () => {
       "resume",
       "status",
     ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("rejects nonexistent host function references and mount names", () => {
+  for (const reference of [
+    "internal.missing.maintain",
+    "internal.maintenance.missing",
+    "internal.orders.place",
+    "components.missingMount",
+  ]) {
+    const dir = copyPackage();
+    try {
+      const readme = join(dir, "README.md");
+      writeFileSync(readme, `${readFileSync(readme, "utf8")}\n\`\`\`ts\n${reference};\n\`\`\`\n`);
+      assert.ok(
+        checkReadmeSamples(dir).some((failure) => failure.includes(reference)),
+        reference,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("rejects a host reference missing from the generated API", () => {
+  const dir = copyPackage();
+  try {
+    const api = join(dir, "example/convex/_generated/api.d.ts");
+    const original = readFileSync(api, "utf8");
+    const changed = original.replace(/^\s*maintenance: typeof maintenance;\n/mu, "");
+    assert.notEqual(changed, original);
+    writeFileSync(api, changed);
+    assert.ok(
+      checkReadmeSamples(dir).some((failure) => failure.includes("internal.maintenance.maintain")),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("rejects a source-linked excerpt whose arguments drift", () => {
+  const dir = copyPackage();
+  try {
+    const readme = join(dir, "README.md");
+    const original = readFileSync(readme, "utf8");
+    const changed = original.replace('"tinybird maintenance"', '"changed schedule"');
+    assert.notEqual(changed, original);
+    writeFileSync(readme, changed);
+    assert.ok(
+      checkReadmeSamples(dir).some((failure) =>
+        failure.includes("excerpt does not match example/convex/crons.ts"),
+      ),
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

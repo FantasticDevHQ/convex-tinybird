@@ -1,28 +1,39 @@
 # @fantastic-dev/convex-tinybird
 
-## What it does
+A reusable Convex component for delivering analytics events to Tinybird. Enqueue runs in the
+host mutation's transaction, so domain writes and the event commit or roll back together.
+Delivery uses Workpool with bounded retries and one event per request.
 
-A Convex component that ships analytics events to [Tinybird](https://www.tinybird.co). A host
-mutation enqueues an event **in the same transaction as its own writes**, so the event commits or
-rolls back with them and there is no window in which the row exists and the event does not.
-
-Delivery is **at least once**, one event per request, deduplicated by the event's identity. An
-event Tinybird accepted whose acknowledgement never reached us is indistinguishable from one
-never sent, so it is sent again; deduplication is Tinybird's, on `event_id`. The alternative is
-at-most-once, which loses events rather than duplicating them.
-
-Project-agnostic by construction: it depends on `convex` and `@convex-dev/workpool`, and never on
-the host's schema, auth or packages. `node scripts/check-boundary.mjs` enforces that.
+Delivery is **at least once**. A lost acknowledgement can cause a repeated request; Tinybird
+queries must handle those repeats. The component's enqueue identity checks do not provide
+exactly-once ingestion or make raw additive aggregates safe.
 
 ## Install and mount
 
-Today it is a workspace package; it will be published to npm (FTD-2491).
+This is currently a private workspace package, not a published npm release. Add
+`@fantastic-dev/convex-tinybird` as a workspace dependency alongside `convex`. The component's
+only runtime dependencies are Convex and Workpool; it imports no host schema or authentication.
+
+The [example configuration](./example/convex/convex.config.ts) mounts two independent streams:
+
+<!-- example: example/convex/convex.config.ts -->
 
 ```ts
-// convex/convex.config.ts
 import tinybird from "@fantastic-dev/convex-tinybird/convex.config";
 import { defineApp } from "convex/server";
 
+/**
+ * Two instances, mounted under different names.
+ *
+ * This is the portability proof, not decoration. Each mount gets its own tables, its own
+ * settings row and its own Workpool, so an event enqueued into `productEvents` is invisible to
+ * `auditEvents` — and pausing one does not pause the other. A component that leaked state
+ * between mounts would be unusable for anything but a single global stream, and nothing in the
+ * component's own test suite can notice that, because it registers one instance.
+ *
+ * The two also carry different credentials, which is the realistic shape: a product stream and
+ * an audit stream usually live in different Tinybird workspaces with separately scoped tokens.
+ */
 const app = defineApp();
 
 app.use(tinybird, {
@@ -33,429 +44,333 @@ app.use(tinybird, {
   },
 });
 
+app.use(tinybird, {
+  name: "auditEvents",
+  env: {
+    TINYBIRD_TOKEN: process.env.AUDIT_TINYBIRD_TOKEN,
+    TINYBIRD_HOST: process.env.AUDIT_TINYBIRD_HOST,
+  },
+});
+
 export default app;
 ```
 
-Mount it more than once if you have more than one stream. Each mount gets its own tables, its own
-settings row, its own Workpool and its own credentials — pausing one does not pause another. The
-[example app](./example) mounts two and tests exactly that.
+Each mount has separate events, settings, health, credentials, and Workpool state. Keep mount
+names stable when updating the host. The example tests prove that both mounts accept the same
+`(datasource, eventId)` independently and that pausing one leaves the other running.
 
 ## Environment
 
-Both variables are declared by the component and supplied by the host at mount time. Component
-code reads them only through the generated `env` export; they are never stored in a table,
-returned by a function, or logged.
+The host supplies the component's declared variables through each mount's `env` mapping.
+Component code reads the generated `env` export. Credentials are not stored in component tables,
+returned by public functions, or logged.
 
-| Variable         | Scope                                                          | Absent                                                                                                          |
-| ---------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `TINYBIRD_TOKEN` | `DATASOURCE:APPEND`                                            | The component is **inert**: enqueue still stores events, nothing is scheduled, no request leaves the deployment |
-| `TINYBIRD_HOST`  | Regional API base, e.g. `https://api.eu-central-1.tinybird.co` | The default host                                                                                                |
+| Variable         | Use                                      | When absent                                  |
+| ---------------- | ---------------------------------------- | -------------------------------------------- |
+| `TINYBIRD_TOKEN` | Server-side datasource append credential | Enqueue stores events, but delivery is inert |
+| `TINYBIRD_HOST`  | Regional API origin                      | Uses the component's default Tinybird origin |
 
-`TINYBIRD_HOST` is validated before any request: a bare `https` origin with no path, query,
-fragment or embedded credentials. The one exception is a loopback address, so Tinybird Local
-works. A host that fails validation **pauses the destination** rather than failing events — the
-rows are fine and the configuration is not.
+Use a bare HTTPS origin without a path, query, fragment, or embedded credentials. Loopback HTTP
+is supported for Tinybird Local. Invalid destinations and authentication failures pause the
+mount and appear in its health result.
 
 ## Enqueue from a host mutation
 
-Lifted from [`example/convex/orders.ts`](./example/convex/orders.ts), which is compiled and
-tested — a sample that only lives in a README rots.
+Inside the example's [`place` mutation](./example/convex/orders.ts), the domain write and enqueue
+share `ctx`. The complete file includes the imports, validators, second stream, and rollback test hook.
+
+<!-- example: example/convex/orders.ts -->
+
+```ts
+const orderId = await ctx.db.insert("orders", { sku, quantity, placedAt: Date.now() });
+
+await productEvents.enqueue(ctx, {
+  datasource: "orders",
+  // The identity a host chooses is what makes delivery idempotent end to end: the same
+  // `eventId` must map to the same Tinybird row, so the order's id is the natural key.
+  eventId: orderId,
+  payload: { order_id: orderId, sku, quantity },
+});
+```
+
+Identity is `(datasource, eventId)` within one mount. An identical retained payload returns a
+duplicate result without scheduling another delivery. A different payload under that identity
+throws `identity_conflict`. Payloads are canonicalized and bounded: 64 KiB by default and
+512 KiB maximum. Invalid JSON, identifiers, datasource names, and oversized payloads are rejected.
+
+## The Tinybird side
+
+The host owns datasource columns and query semantics. The component sends canonical payload
+columns unchanged and does not enforce an `event_id` field. For the supplied generic schema,
+the host must set `event_id` to the envelope's `eventId`.
+
+The orders app above sends `order_id`, `sku`, and `quantity` to an `orders` datasource. It is a
+separate portability example and does not match the supplied `events` datasource. Copy its
+transaction pattern, then construct a payload matching your own Tinybird schema.
+
+See the [Tinybird guide](./tinybird/README.md) for the generic datasource, bounded query, pinned
+SDK equivalent, and Docker smoke test. Its `ReplacingMergeTree` table and `FINAL` query count
+repeated deliveries once before background merges. Additive materialized views over raw
+at-least-once data are unsafe; the guide describes a deduplicated-copy approach and its rebuild
+requirements.
+
+## Monitoring
+
+Use `heartbeat` for frequent monitoring: it reads a bounded pair of records and reports pause
+state and the age of the oldest pending event. Use `health` for an operator's bounded counts;
+`capped: true` means the count is a lower bound. Neither result includes event payloads or credentials.
+
+The example exposes both through an operator query:
+
+<!-- example: example/convex/operations.ts -->
+
+```ts
+export const operatorHeartbeat = query({
+  args: {},
+  returns: v.object({ heartbeat: v.any(), health: v.any() }),
+  handler: async (ctx) => ({
+    heartbeat: await productEvents.heartbeat(ctx),
+    health: await productEvents.health(ctx),
+  }),
+});
+```
+
+Alert on a paused mount, growing `oldestPendingAgeMs`, and failed events. Inspect `pausedReason`,
+`lastDeliveredAt`, and the redacted failure information when investigating. Delivered events
+are governed by retention rather than counted by `health`.
+
+## Pausing and resuming
+
+Authorize operators in the host before exposing these operations. The example wrappers are
+unauthenticated demonstrations; a production host must establish the caller and pass its identity
+as `actor`. The component records that string but does not authenticate it.
+
+<!-- example: example/convex/operations.ts -->
+
+```ts
+export const operatorPause = mutation({
+  args: { actor: v.string() },
+  returns: v.any(),
+  // A real host authorizes `actor` before this line.
+  handler: async (ctx, { actor }) => productEvents.pause(ctx, { actor }),
+});
+```
+
+After correcting a token or destination, resume the mount. This example processes at most ten
+bounded batches per request and reports how much it scheduled. Repeat operator requests if a
+larger backlog remains; do not remove the bound.
+
+<!-- example: example/convex/operations.ts -->
+
+```ts
+export const operatorResume = mutation({
+  args: { actor: v.string() },
+  returns: v.object({ requeued: v.number() }),
+  handler: async (ctx, { actor }) => {
+    let requeued = 0;
+    let pass = 0;
+    do {
+      const result = await productEvents.resume(ctx, { actor });
+      requeued += result.requeued;
+      if (result.requeued === 0) break;
+      pass += 1;
+    } while (pass < 10);
+    return { requeued };
+  },
+});
+```
+
+Resume selects pending events without an active Workpool item. Events already waiting for a
+retry keep their existing work and retry budget.
+
+## Replaying dead letters
+
+Fix the cause before replaying. This wrapper processes a bounded set of dead letters:
+
+<!-- example: example/convex/operations.ts -->
+
+```ts
+export const operatorReplayFailed = mutation({
+  args: { actor: v.string() },
+  returns: v.object({ replayed: v.number() }),
+  handler: async (ctx, { actor }) => {
+    let replayed = 0;
+    for (let pass = 0; pass < 10; pass += 1) {
+      const result = await productEvents.replayFailed(ctx, { actor });
+      replayed += result.replayed;
+      if (!result.remaining) break;
+    }
+    return { replayed };
+  },
+});
+```
+
+For a single inspected event:
+
+<!-- example: example/convex/operations.ts -->
+
+```ts
+export const operatorReplayEvent = mutation({
+  args: { orderId: v.id("orders"), actor: v.string() },
+  returns: v.any(),
+  handler: async (ctx, { orderId, actor }) =>
+    productEvents.replayEvent(ctx, { datasource: "orders", eventId: orderId, actor }),
+});
+```
+
+Replay preserves the event identity and payload, resets the attempt count, and retains failure
+history. `remaining` describes dead letters present now, so persistent failures can keep it true.
+Use bounded operator requests and inspect health between them. A `payload_missing` event needs
+an identical re-enqueue to restore its payload; replay cannot reconstruct missing data.
+
+Operator controls are mount-wide. `enqueue` and `status` accept a datasource, but pause, resume,
+health, and bulk replay affect the whole mount. Use separate mounts when streams need separate controls.
+
+## Maintenance and recovery
+
+The host owns the maintenance schedule. Workpool owns ordinary retry scheduling; `requeueStuck`
+recovers orphaned or expired work after crash boundaries. `cleanup` handles finished-event retention.
+The example registers this cron:
+
+<!-- example: example/convex/crons.ts -->
+
+```ts
+import { cronJobs } from "convex/server";
+
+import { internal } from "./_generated/api";
+
+// The host chooses the interval. Each invocation processes bounded maintenance pages.
+const crons = cronJobs();
+
+crons.daily("tinybird maintenance", { hourUTC: 4, minuteUTC: 0 }, internal.maintenance.maintain);
+
+export default crons;
+```
+
+Its handler processes one recovery page and one cleanup page per stream per invocation:
+
+<!-- example: example/convex/maintenance.ts -->
 
 ```ts
 import { TinybirdDelivery } from "@fantastic-dev/convex-tinybird";
 import { v } from "convex/values";
 
 import { components } from "./_generated/api";
-import { mutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 
-const productEvents = new TinybirdDelivery(components.productEvents);
+const streams = {
+  productEvents: new TinybirdDelivery(components.productEvents),
+  auditEvents: new TinybirdDelivery(components.auditEvents),
+};
 
-export const place = mutation({
-  args: { sku: v.string(), quantity: v.number() },
+/**
+ * One recovery page and one retention page per stream, per cron invocation.
+ * Child mutations share this transaction's read budget, so do not loop over their pages.
+ * Save unfinished recovery cursors: old but healthy work can occupy many consecutive pages.
+ * Retention needs no cursor because each deleted row leaves its scan range.
+ */
+export const maintain = internalMutation({
+  args: {},
   returns: v.null(),
-  handler: async (ctx, { sku, quantity }) => {
-    const orderId = await ctx.db.insert("orders", { sku, quantity, placedAt: Date.now() });
-
-    await productEvents.enqueue(ctx, {
-      datasource: "orders",
-      // The identity you choose is what makes delivery idempotent end to end: the same
-      // `eventId` must map to the same Tinybird row, so the row's own id is the natural key.
-      eventId: orderId,
-      payload: { order_id: orderId, sku, quantity },
-    });
-
+  handler: async (ctx) => {
+    for (const [name, stream] of Object.entries(streams)) {
+      const checkpoint = await ctx.db
+        .query("maintenanceCursors")
+        .withIndex("by_stream", (q) => q.eq("stream", name))
+        .unique();
+      const result = await stream.requeueStuck(ctx, {
+        actor: "example cron",
+        cursor: checkpoint?.cursor ?? undefined,
+      });
+      const cursor = result.remaining ? result.cursor : null;
+      if (checkpoint) {
+        await ctx.db.patch(checkpoint._id, { cursor });
+      } else {
+        await ctx.db.insert("maintenanceCursors", { stream: name, cursor });
+      }
+      await stream.cleanup(ctx, { actor: "example cron" });
+    }
     return null;
   },
 });
 ```
 
-**Identity.** `datasource` plus `eventId` is the identity. Re-enqueuing the same identity with an
-identical payload is accepted and does not send twice; with a _different_ payload it is rejected
-as `identity_conflict` rather than silently overwriting.
+The host's [`maintenanceCursors` table](./example/convex/schema.ts) persists unfinished recovery
+cursors across invocations. A recovery cursor is a compound object with `delivering` and
+`pending` positions; each position is null or an `{ updatedAt, creationTime }` pair. Pass it back
+unchanged and reset it when `remaining` is false. Restarting every invocation at the first page
+can strand work behind a long prefix of healthy jobs.
 
-**Bounds and errors.** The payload is canonicalised (sorted keys, no whitespace) and bounded —
-64 KiB by default, 512 KiB hard maximum. Invalid input throws a `ConvexError` with a documented
-`code` **before any write**: `invalid_datasource`, `invalid_event_id`, `payload_too_large`,
-`identity_conflict`.
+Child mutations share their parent transaction's read budget. Looping cleanup pages inside one
+host mutation can exceed that budget and roll back every deletion. Separate cron invocations
+provide separate transactions. Adjust the interval to the backlog and recovery latency your host
+needs; the example's daily schedule is a starting configuration.
 
-## The Tinybird side
+## Retention and dedupe window
 
-The component sends the row verbatim and requires exactly one thing of your schema: `event_id`
-must equal the envelope's `eventId`. Everything else is yours.
+By default, `cleanup` removes delivered events after seven days and failed events after thirty.
+It preserves pending and delivering events regardless of age. Retention uses completion time,
+and removes the event and associated payload together.
 
-Because delivery is at least once, the engine is part of the contract:
-[`tinybird/README.md`](./tinybird/README.md) explains why the datasource is a
-`ReplacingMergeTree`, why the pipe reads with `FINAL`, why additive materialized views over
-at-least-once data over-count permanently, and the copy-pipe upgrade path when `FINAL` gets
-expensive. A ready-to-deploy [datasource](./tinybird/datasources/events.datasource) and
-[pipe](./tinybird/pipes/events_by_type.pipe) are there, with a Docker smoke test that proves
-three identical deliveries count once.
+The retained event is the enqueue dedupe receipt. Once removed, the same identity can enqueue
+and deliver again. Set retention for the producer's retry window and retain duplicate-safe
+Tinybird reads for older repeats. Invalid negative or non-finite retention values are rejected.
 
-## Monitoring
+Cleanup has one bounded budget across delivered and failed rows, with delivered rows first.
+A sustained delivered backlog can delay failed-row cleanup; monitor maintenance progress and
+choose an appropriate schedule. Each cleanup records its actor and deletion count.
 
-`health` is the operator view. Each state is counted through an index and stops at a cap, so the
-query reads at most 151 rows per state — the cap plus one, which is how it knows there are more — and never scans the table. A capped count reports
-`capped: true` rather than an exact number, because "more than 150 waiting" is the answer
-an operator acts on.
-
-**Know the real cost before you rely on it.** Convex reads whole documents and allows about 8 MiB
-per function call, so what matters is rows multiplied by row size. The cap bounds the rows, and
-since the payload moved to its own table an event row no longer depends on your event size at all —
-so **event size no longer affects `health` at all**. Before that split it did: a call failed at
-roughly 130 unfinished events at the default 64 KiB payload bound, which is the query whose whole
-purpose was to stay cheap failing on exactly the backlog it exists to report.
-
-What is left is the cap itself, and it is sized from a measured row rather than an estimated one.
-The largest event the contract permits is about 5.4 KB — every string at its maximum, a full
-failure history, and those strings filled with the costliest characters the caps admit, because
-the caps count UTF-16 units while storage counts UTF-8 bytes. `health` counts three states and
-reads one row past the cap in each, plus two more for the heartbeat it embeds, so a full call is `(3 x 151 + 2) x 5.4 KB`, roughly 2.3 MiB of the 8. A cap of 1000 would have been 15.5 MiB — nearly twice the budget — on exactly the day you need the
-query.
-
-**Alert on `heartbeat`, not on `health`.** It reads exactly two documents however much is queued,
-returns `paused` and `oldestPendingAgeMs`, and costs the same on your worst day as on your best.
-`health` is for a person asking a question, not for a monitor asking every minute — and you no
-longer have to know your events are small to reach for it.
-
-```ts
-const beat = await tinybird.heartbeat(ctx); // cheap, always available
-const health = await tinybird.health(ctx); // adds counts, costs more
-```
-
-What to alert on:
-
-- **`paused`**, in both — nothing is being delivered. `pausedReason` says whether the credential was
-  refused or the host is misconfigured, both of which need a person.
-- **`counts.failed.count > 0`**, `health` only — events Tinybird will not accept as they stand. They are kept,
-  and each one records why in `lastError` and its failure history.
-- **`oldestPendingAgeMs`**, in both, above whatever your latency budget is — a backlog that is growing shows
-  up in the counts, but a backlog that is _stuck_ shows up here and nowhere else.
-
-Delivered events are not counted. Retention bounds them rather than this query, and
-`lastDeliveredAt` answers "is anything getting through" without paying for the count.
-
-Neither query ever returns a payload, a host or a credential, and every error it surfaces is
-truncated and redacted.
-
-## Pausing and resuming
-
-A `401` or `403` means the token is wrong, and no number of retries fixes that. Instead of
-spending an event's retry budget the component pauses the destination: the event stays `pending`,
-nothing further is sent, and `health` reports `paused: true` with the reason. Events enqueued
-while paused are stored and left alone.
-
-Once the token is fixed, `resume` clears the pause and puts waiting events back to work a bounded
-batch at a time, because a paused destination can accumulate an arbitrary backlog and one
-transaction cannot re-enqueue all of it. Call it until it reports nothing left:
-
-```ts
-let requeued = 0;
-let pass = 0;
-do {
-  const result = await tinybird.resume(ctx, { actor: userId });
-  requeued += result.requeued;
-  if (result.requeued === 0) break;
-  pass += 1;
-} while (pass < 10);
-```
-
-`resume` only picks up events the delivery pool is not already working on. An event that is
-`pending` between two retry attempts needs no operator, and queueing a second work item for it
-would give it a second retry budget and let it be sent more times than its policy allows. So each
-call schedules what it picks up, and the next call finds less to do.
-
-The pass bound is not decoration. This runs inside a mutation, and a mutation has a fixed
-transaction budget — an unbounded `do { } while (requeued > 0)` is fine on a small backlog and
-runs until it hits that budget on a large one, which is exactly the situation an operator reaches
-for `resume` in. Bounding the passes means a big backlog takes several calls instead of failing
-one; the returned count accumulates across passes so the operator can see whether to call again.
-This is the shape `example/convex/operations.ts` uses, and this sample is lifted from it.
-
-## Replaying dead letters
-
-An event that Tinybird refused, or that ran out of attempts, is kept rather than dropped. Once the
-cause is fixed, replay puts it back in the queue:
-
-```ts
-// Bounded on purpose — see below. Ten passes at the default limit of 20 is 200 events.
-for (let pass = 0; pass < 10; pass += 1) {
-  const { remaining } = await tinybird.replayFailed(ctx, { actor: userId });
-  if (!remaining) break;
-}
-
-await tinybird.replayEvent(ctx, { datasource: "orders", eventId, actor: userId });
-```
-
-**`remaining` means "there are dead letters right now", not "there are ones you have not seen
-yet".** If the cause is genuinely fixed the loop drains and stops. If it is not, replayed events
-fail again, return to `failed`, and `remaining` stays true — so an unbounded `while (remaining)`
-loop would hammer a broken destination forever. Bound the loop and check `health` before running
-it again.
-
-Replay walks the dead letters by when they last changed, not by when they were created, so an
-event that is replayed and fails again goes to the back of the queue. Every dead letter is tried
-once before any is tried twice. Without that, a still-broken destination means the oldest few
-events are replayed over and over while everything behind them is never reached at all.
-
-**One dead letter cannot be replayed away.** `payload_missing` means the event has no stored
-payload, so there is nothing to send and delivery will find nothing again however many times you
-replay it. Enqueue the same event a second time instead: `enqueue` restores the missing row and
-returns `repaired`. Anything else with that identity is a conflict, checked against the byte
-length and content fingerprint the event row kept — enough to catch an accidental substitution,
-not a deliberate one.
-
-**The operator controls are mount-wide.** `enqueue` and `status` take a datasource, but
-`pause`, `resume`, `health` and `replayFailed` do not, so a mount carrying more than one
-datasource cannot act on them independently — replaying to fix one datasource resends the
-other's dead letters too. Mount the component once per datasource.
-
-**The default batch is 20, and the ceiling is 30.** Both were sized from bytes when the payload
-still lived on the event row, where a batch of 100 cost roughly 19 MiB against Convex's ~8 MiB
-per-call limit. The payload now lives in its own table, so an event row costs the same whatever
-your events carry and the same batch costs well under a megabyte.
-
-So payload size and batch size are independent: raising `maxPayloadBytes` no longer means
-lowering `limit`. The values above are now conservative rather than binding, and they are left
-alone on purpose — raising them is a behaviour change that deserves its own tests.
-
-**Replay is not re-enqueue.** The identity and the payload are the ones the host committed, so a
-later matching enqueue is still a duplicate and a mismatched one is still a conflict. The attempt
-count resets because the budget is being granted again; the failure history does not, because "why
-did this die" is the question you have after a replay.
-
-Replay takes the least recently changed dead letters first and has no category filter. Replaying is what moves the
-scan forward, so a filter would leave the rows it skipped parked at the front of the window and
-make every dead letter behind them unreachable while the call still reported that nothing remained.
-To replay a specific event, use `replayEvent`.
-
-Replaying while paused stores the events without sending them, which is usually what you want: fix
-the credential, then resume.
-
-`pause`, `resume` and both replays record who acted. The component authenticates nobody, so wrap them in host
-mutations that authorize the caller.
-
-## The maintenance job
-
-Two jobs the component cannot run for itself, on one cron. Neither is optional: without them a
-delivery whose process died is never retried, and finished rows accumulate forever.
-
-`requeueStuck` is crash recovery. A delivery that was in flight when its process died is left
-`delivering` with nothing working on it, and nothing else notices — the workpool item is gone, so
-there is no retry to wait for. The scan returns those rows to `pending` and reschedules them. It
-is filed here rather than under Retention because it is not about age: a stuck row is not old
-work to discard, it is live work that lost its worker.
-
-The component owns no cron. Schedule it from yours:
-
-```ts
-// convex/crons.ts
-crons.daily("tinybird retention", { hourUTC: 4, minuteUTC: 0 }, internal.tinybird.sweep);
-
-// convex/tinybird.ts
-export const sweep = internalMutation({
-  handler: async (ctx) => {
-    // Rescue first, sweep second. A row that has stopped moving is returned to `pending`
-    // and is outside retention either way, so the ordering costs nothing — but the reverse
-    // leaves a stuck row unexamined for a whole interval.
-    // `cursor` must be carried, not discarded. Every call without it restarts at the head of
-    // the scan, and a page of work that is old but still healthy sits there permanently —
-    // those rows are skipped rather than patched, so their age never moves. A loop that drops
-    // the cursor makes no progress at all in the condition this function exists for.
-    let cursor;
-    for (let pass = 0; pass < 10; pass += 1) {
-      const result = await tinybird.requeueStuck(ctx, { actor: "nightly cron", cursor });
-      cursor = result.cursor;
-      if (!result.remaining) break;
-    }
-
-    // Bounded, like every loop against this component. The limit is spent ONCE across both
-    // states, so ten passes is at most 2000 rows in total — not per state. Large payloads
-    // reach the sweep's byte budget first and each pass returns fewer.
-    for (let pass = 0; pass < 10; pass += 1) {
-      const { remaining } = await tinybird.cleanup(ctx, { actor: "nightly cron" });
-      if (!remaining) break;
-    }
-  },
-});
-```
-
-Carry `cursor` forward between passes. Healthy rows are skipped rather than patched, so their age
-never moves and a loop that restarts at the head of the scan re-reads the same page forever,
-making no progress in exactly the condition the function exists for. It is a number rather than an
-opaque token because `.paginate()` is only supported in the app and never inside a component;
-treat it as opaque anyway and pass back what you were given.
-
-The second loop is the retention sweep, described under [Retention](#retention) — it is on this
-cron because the two want the same schedule, not because they are the same concern.
-
-## Retention
-
-Finished events are kept for a while and then removed. `cleanup` deletes `delivered` rows past
-seven days and `failed` rows past thirty, in bounded batches, and never touches an event that is
-still `pending` or `delivering` however old it is — age is not a reason to discard work nobody
-has finished.
-
-It is scheduled from [the maintenance job](#the-maintenance-job) above.
-
-**The dedupe window IS the delivered retention.** Identity is `(datasource, eventId)`, and a
-delivered row is what makes a repeat enqueue a `duplicate`. Once retention removes that row the
-same identity is a new event again and will be sent a second time. Seven days is the default
-because that is a long time to be retrying something; if your producer can re-emit an event
-older than that, either raise `deliveredRetentionMs` or rely on Tinybird-side dedupe by
-`event_id`, which is what the example datasource's `ReplacingMergeTree` is for.
-
-`failed` rows are kept longer, at thirty days, for a different reason: a delivered row only
-answers "have I sent this", while a dead letter is something an operator may still act on, and
-the window to notice one is measured in weeks.
-
-Deleting an event deletes its payload row in the same transaction, so the two cannot part
-company. Retention measures age from when an event **finished**, not from when it was created —
-an event that sat pending through a long pause and was delivered a moment ago keeps its full
-window, which matters because those are exactly the events a producer is most likely to re-emit.
-
-A retention that is negative, `NaN` or infinite is refused with `code: "invalid_retention"`
-rather than clamped. `NaN` is the reason: Convex orders it above every finite number, so a sweep
-given one would match every row of that state and delete events seconds old.
-
-Each sweep records itself in `lastOperatorAction` with the `actor` you pass and how many rows
-it removed, so a sweep that stops running is visible rather than showing up only as tables that
-quietly grow.
-
-One budget is spent across both states, delivered first. A large delivered backlog therefore
-delays the failed sweep by a few passes rather than starving it — the loop above drains both, but
-if you care about dead letters promptly, call `cleanup` with a `failedRetentionMs` of your own on
-its own schedule.
-
-`reclaimOrphanedPayloads` is a separate, rarer call for payload rows whose event has gone.
-Nothing here produces one — but finding them means reading payloads, and a payload is the one
-thing whose size you control, so folding that scan into the frequent sweep would make retention's
-cost depend on your event size again.
-
-This scan carries a `cursor` too, for the same reason as the rescue above — a payload whose event
-still exists is skipped rather than deleted, so it occupies the first page permanently and a loop
-that restarts there never reaches an orphan. Carry it forward until `isDone`.
-
-The default `limit` is 2, sized for the largest payload the component allows, and you may raise it
-to at most **20** — anything higher is clamped to 20 rather than honoured.
-
-Twenty is what the default 64 KiB payload bound affords. If your payloads are much smaller the
-read budget would allow far more — around 440 at 1 KiB — but the ceiling does not, and that is
-deliberate rather than an oversight: unlike `cleanup`, this scan cannot budget by bytes, because
-it learns a payload's size by reading it and has therefore already paid. A row count is the only
-bound available, and one fixed number cannot be both safe at 512 KiB and generous at 1 KiB.
-
-So if a reclaim pass is too slow for your table, the ceiling is the thing to revisit — not the
-`limit` you pass, which cannot go above it.
-
-The scan is eventually consistent per **pass**, not per call: a row inserted behind a scan that
-has already gone past it is found on the next pass, because `isDone` resets the cursor. At the
-default limit that pass can be long — 100 000 payload rows at a limit of 2 is 50 000 calls — so
-size `limit` for how quickly you want a leak found, not only for what one call can afford.
-
-The numbers are low because reclaiming an orphan pays for its payload **twice** — once to page
-it in, and again when `ctx.db.delete` re-reads the document it deletes. If you raise
-`maxPayloadBytes`, lower this limit to match: nothing can do it for you, since the scan never
-sees that option.
+`reclaimOrphanedPayloads` is a separate maintenance operation for payloads whose event is gone.
+Its default limit is two and maximum is twenty. Large payloads require a conservative limit
+because reads and deletes consume the transaction budget. Persist its cursor until `isDone`,
+then reset for another pass. It records no operator actor, so the host must provide any required audit trail.
 
 ## Host responsibilities
 
-The component deliberately does not do these, and will not start.
-
-**Authorization.** It authenticates nobody. `pause`, `resume`, `replayFailed`, `replayEvent`,
-`requeueStuck` and `cleanup` are destructive or operationally significant, and each takes an
-opaque `actor` string that is recorded and never checked. Authorize the caller yourself before
-invoking any of them — a `getUserIdentity` inside the component would be it making a policy
-decision on your behalf, which is why the boundary script forbids it outright.
-
-`reclaimOrphanedPayloads` needs the same gate and gives you less to work with. It deletes payload
-rows, and unlike every call above it takes **no `actor` at all** and records no
-`lastOperatorAction` — so there is no audit trail of who ran it, and nothing after the fact will
-tell you. That is deliberate: it is a garbage-collection scan meant to be driven by your cron
-rather than by a person, and an `actor` on a scheduled sweep would record the scheduler, not a
-decision. If you do expose it to an operator, log the caller on your side, because the component
-will not.
-
-**Privacy of payload fields.** The payload is sent verbatim and stored until retention removes
-it. Nothing redacts, hashes or classifies it. If a field must not reach Tinybird, do not enqueue
-it.
-
-**Tenant scoping.** The component has no notion of a tenant. Events from every tenant land in one
-stream unless you mount an instance per tenant or put the tenant in the payload and filter at
-read time. Neither is done for you, and an analytics dashboard that forgets it will show one
-customer another's data.
-
-**If you share a mount between tenants, `eventId` must be unique across all of them.** Identity is
-`(datasource, eventId)` within a mount, so two tenants using the same per-tenant natural key —
-each numbering its own orders from 1 — collide. The second `enqueue` throws `identity_conflict`,
-and because it runs inside the caller's mutation that error propagates and **aborts the host
-mutation**: the second tenant's order is never written at all. That is a cross-tenant denial of
-service, and it is sharper than the dashboard leak above because one tenant's ordinary traffic
-breaks another's writes. Prefix the tenant (`${tenantId}:${orderId}`), use an id that is already
-globally unique such as the Convex document id, or mount per tenant.
-
-**Scheduling.** The component owns no cron. Without the maintenance job above, a delivery whose
-process died is never retried and delivered rows are never removed.
+- Authenticate and authorize operational mutations and analytics reads. The component has no
+  user or tenant policy, and an `actor` string is not authorization.
+- Validate domain events and allowlist payload fields. Exclude prompts, source code, message
+  bodies, tool output, email addresses, secrets, and unchecked arbitrary metadata.
+- Map tenant and project identity explicitly and enforce tenant filters server-side in query
+  endpoints. Keep query and ingestion credentials out of browser bundles.
+- Make event IDs unique across tenants sharing a mount and datasource, for example by including
+  a tenant prefix or using a globally unique domain ID. A conflicting identity aborts the host mutation.
+- Own Tinybird resources, duplicate-safe metric definitions, maintenance scheduling, retention,
+  and alerting. Convex remains the operational and billing source of truth.
 
 ## Limitations
 
-- **No batching.** One event is one request. That is what keeps identity and retry per-event; it
-  also means a burst is a burst of requests, bounded by the pool's parallelism of 4.
-- **No `Retry-After` scheduling.** A rate-limited response is retried on the configured backoff,
-  not on the server's hint.
-- **Not usable from a browser.** The append token is server-side only, and the component runs
-  inside Convex.
-- **No schema enforcement.** The component never inspects your payload beyond size and canonical
-  form; a column mismatch surfaces as Tinybird quarantining rows.
+- One event per HTTP request; Workpool bounds parallel delivery to four.
+- Retry uses configured backoff and does not schedule from `Retry-After`.
+- No payload column validation, tenant model, dashboard queries, or browser client.
+- No datasource-scoped operator controls within a shared mount.
 
 ## Testing against it
 
-Register each mounted instance once in `convex-test`. The helper also registers that instance's
-nested Workpool, without which the first enqueue fails the moment it schedules work.
+Import `register` from `@fantastic-dev/convex-tinybird/test` and register each named mount once.
+The helper registers its nested Workpool too. The example uses transaction limits in its test harness:
+
+<!-- example: example/convex/orders.test.ts -->
 
 ```ts
-import { register } from "@fantastic-dev/convex-tinybird/test";
-import { convexTest } from "convex-test";
-
-const t = convexTest(schema, modules);
-register(t, "productEvents");
-register(t, "auditEvents");
+function setup() {
+  const t = convexTest({ schema, modules, transactionLimits: true });
+  register(t, "productEvents");
+  register(t, "auditEvents");
+  return t;
+}
 ```
 
-Two things that will otherwise cost you an afternoon, both learned building the example:
-
-- `convex-test` never evaluates the mount-time `env` mapping, so stub the component's own
-  `TINYBIRD_TOKEN`, not your host-side variable names. Stubbing the host names configures
-  nothing and every delivery silently does not happen.
-- `vi.stubEnv` is process-wide, so per-instance credentials are not expressible in that harness.
-
-The [example app](./example) is a complete worked case: two mounts, transactional rollback,
-identity conflict, replay, and the maintenance job.
+Stub the component's `TINYBIRD_TOKEN` and HTTP transport in tests. `convex-test` does not evaluate
+mount-time host environment mappings; `vi.stubEnv` is process-wide, so that harness cannot prove
+per-mount credential values. The example tests cover delivery, rollback, identity conflicts,
+replay, mount isolation, and bounded maintenance. Real mount configuration is also checked by codegen.
 
 ## Design and conventions
 
-[`docs/architecture.md`](./docs/architecture.md) — the state machine, transaction boundaries, the
-dedupe window, scheduling ownership, what the test suite cannot tell you, and the crash paths
-`requeueStuck` recovers.
+See [architecture.md](./docs/architecture.md) for the state machine, scheduling ownership,
+transaction boundaries, and recovery behavior. Source-linked excerpts above are checked against
+the example files; the README gate also verifies client methods, generated host references, and mount names.
 
 ## Checking it locally
 
@@ -485,4 +400,3 @@ changed validators, missing files, and obsolete output without rewriting your ch
 your deployment credentials. Convex may download its local backend binary on the first run;
 the delivery test suites themselves use stubbed HTTP transport. No Tinybird credentials are needed.
 The temporary local deployment is removed when the check finishes.
-
