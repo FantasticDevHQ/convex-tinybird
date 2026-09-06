@@ -450,8 +450,10 @@ then reset for another pass. It records no operator actor, so the host must prov
 
 - One event per HTTP request; Workpool bounds parallel delivery to four.
 - Retry uses configured backoff and does not schedule from `Retry-After`.
-- No payload column validation, tenant model, dashboard queries, or browser client.
-- No datasource-scoped operator controls within a shared mount.
+- No payload column validation, tenant model, app-specific dashboard queries, or dashboard UI.
+  The `/browser` entry provides `queryPipe`; the host owns authorization and token lifecycle.
+- Datasource-scoped pause, resume, health, and replay share the mount's credentials and Workpool.
+  Credential failures pause the whole mount; use separate mounts for independent credentials.
 
 ## Testing against it
 
