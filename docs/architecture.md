@@ -320,27 +320,26 @@ text to tell a duplicate from a conflict, and `loadForDelivery`, which needs it 
 else — not `getStatus`, not `health`, not `heartbeat`, not any recorded error — so the payload,
 the one field here that can carry customer data, never reaches an operator surface.
 
-**There is no migration for existing data, and that is a decision rather than an omission.** The
-component is pre-release and unpublished. Its only host is this repository, and no host code calls
-`enqueue` at all — `grep -riIl tinybird packages/backend/convex` returns the mount and generated
-types and nothing else — so there is no producer and no deployment that holds an event a backfill
-would have to move.
+The payload split was introduced during pre-release development without an inline-payload data
+migration. The absence of host producers was the rationale recorded at that time, not a statement
+about current adoption. Fantastic.dev now has host-owned lifecycle, usage and backfill producers
+that call the public client through a feature-gated adapter. Enabling those producers and verifying
+delivery are host rollout steps; their presence in the repository does not prove that a deployment
+is enabled or drained.
 
-A deployment that somehow did hold events written before the split would most likely fail the
-schema push rather than reach delivery: Convex validates existing documents on the first push
-after a schema changes, and a document carrying a `payload` field the table no longer declares
-does not match. That is the better failure — loud, at deploy time, before anything is lost. It is
-stated as a likelihood rather than a measurement: verifying it needs a deployment holding
-pre-split rows, and the local one is shared with every other worktree, so probing it there would
-disrupt work that has nothing to do with this.
+The current schema stores canonical bodies in `payloads`; it does not accept the former inline
+`events.payload` field or move old bodies automatically. An installation with pre-split rows needs
+a separately designed migration, verified with representative existing rows in an isolated preview
+deployment before upgrading. That verification must cover preservation of event identities,
+payloads and delivery state. Do not rely on a schema push, receipt cleanup or domain-event backfill
+to migrate the component's stored rows. No such migration is supplied or claimed here.
 
-Either way the answer for such a deployment is to drop its events before upgrading. If this
-component is ever published with existing installs, that changes, and a migration becomes a
-prerequisite rather than a note.
+For fresh installs and ordinary version upgrades, follow [Verify and upgrade](adoption.md#verify-and-upgrade).
+The component remains independent of the host's domain tables and producers.
 
-The `payload_missing` dead letter is therefore not justified by migration. It exists because
-something can delete one of the two rows without the other, and retention — FTD-2502 — is the
-first thing that will delete anything at all.
+The `payload_missing` dead letter detects an event whose separate payload row is absent. It is
+a consistency guard, not a migration mechanism. Retention deletes the event and its payload
+together; dropping events is not an upgrade procedure.
 
 ## Retention
 
