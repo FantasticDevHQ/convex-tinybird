@@ -509,6 +509,31 @@ your deployment credentials. Convex may download its local backend binary on the
 the delivery test suites themselves use stubbed HTTP transport. No Tinybird credentials are needed.
 The temporary local deployment is removed when the check finishes.
 
+### Intermittent test failure investigation
+
+Two historical single-test failures were reported without their names or full errors. Bounded
+local attempts did not reproduce them, and the cause remains unknown. See the
+[maintainer investigation record](docs/test-failure-investigation.md) for the historical sample
+and reproduction evidence.
+
+If a test fails, preserve its complete output before rerunning. From this package directory:
+
+```bash
+log_file="$(mktemp /tmp/convex-tinybird-vitest.XXXXXX)"
+echo "$log_file"
+pnpm exec vitest run --reporter=verbose >"$log_file" 2>&1
+```
+
+After the command finishes, read the complete output with `cat "$log_file"`. The Vitest command
+returns its original exit status; record it before running another command if needed.
+
+Record the commit, Node version, failing test and full error in the linked investigation. Do not retain only the
+summary or pipe the run through `head` or `tail`. A retry can help establish whether the failure
+repeats, but a passing retry does not establish its cause or justify ignoring a failed assertion.
+Link a new recurrence to FTD-2746 and investigate the named assertion or error. Preserve the first
+failure before checking an unchanged rerun, file-edit correlation or isolated test. If evidence
+points to shared tooling, report the reproduction there instead of weakening component assertions.
+
 ## Package artifact
 
 Workspace installation builds the package through `prepare`, so lint, tests and development commands can resolve exports on a fresh checkout. Run `pnpm --filter @fantastic-dev/convex-tinybird build` to rebuild ESM and TypeScript declarations in `dist` after source changes. Client, browser and component configuration exports use the compiled files. The `test` export retains its TypeScript source for Vitest's `import.meta.glob` transform, matching the Workpool test helper. Component source and installation documentation are included in the archive.
