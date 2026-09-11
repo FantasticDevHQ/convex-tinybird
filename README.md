@@ -1,4 +1,4 @@
-# @fantastic-dev/convex-tinybird
+# @fantasticdevhq/convex-tinybird
 
 A reusable Convex component for delivering analytics events to Tinybird. Enqueue runs in the
 host mutation's transaction, so domain writes and the event commit or roll back together.
@@ -16,7 +16,7 @@ deployment configuration, and delivery verification. Repeat that setup for each 
 Mounting this component does not provision Tinybird or reuse another app's infrastructure.
 
 This is currently a private workspace package, not a published npm release. Add
-`@fantastic-dev/convex-tinybird` as a workspace dependency alongside `convex`. The component's
+`@fantasticdevhq/convex-tinybird` as a workspace dependency alongside `convex`. The component's
 only runtime dependencies are Convex and Workpool; it imports no host schema or authentication.
 
 The [example configuration](./example/convex/convex.config.ts) mounts two independent streams:
@@ -24,7 +24,7 @@ The [example configuration](./example/convex/convex.config.ts) mounts two indepe
 <!-- example: example/convex/convex.config.ts -->
 
 ```ts
-import tinybird from "@fantastic-dev/convex-tinybird/convex.config";
+import tinybird from "@fantasticdevhq/convex-tinybird/convex.config";
 import { defineApp } from "convex/server";
 
 /**
@@ -118,7 +118,7 @@ Update each affected deployment and re-push its mount configuration after rotati
 clients must never receive append, deployment, or admin credentials. See the
 [Tinybird JWT contract](https://www.tinybird.co/docs/forward/core-concepts/jwt).
 
-Import `queryPipe` from `@fantastic-dev/convex-tinybird/browser` in browser code. This separate
+Import `queryPipe` from `@fantasticdevhq/convex-tinybird/browser` in browser code. This separate
 entry imports neither the component client nor the Tinybird SDK. Pass the token issuer's
 `host` and `token`, the allowed `pipe` name, typed query `params`, and an optional abort
 `signal`. It returns `{ data, meta, rows }`. Values in `params` are strings, numbers, or
@@ -275,7 +275,7 @@ export const operatorReplayFailed = mutation({
 });
 ```
 
-The wrapper imports `vFailureCategory` from `@fantastic-dev/convex-tinybird`. Pass an optional
+The wrapper imports `vFailureCategory` from `@fantasticdevhq/convex-tinybird`. Pass an optional
 `category`, such as `quarantined`, to replay only that failure category. The index selects matching
 rows before applying the batch limit. `remaining` describes that category; omit the argument to
 replay all dead letters. Both paths order by last update so repeated failures go to the back.
@@ -360,7 +360,7 @@ Its handler processes one recovery page and one cleanup page per stream per invo
 <!-- example: example/convex/maintenance.ts -->
 
 ```ts
-import { TinybirdDelivery } from "@fantastic-dev/convex-tinybird";
+import { TinybirdDelivery } from "@fantasticdevhq/convex-tinybird";
 import { v } from "convex/values";
 
 import { components } from "./_generated/api";
@@ -457,7 +457,7 @@ then reset for another pass. It records no operator actor, so the host must prov
 
 ## Testing against it
 
-Import `register` from `@fantastic-dev/convex-tinybird/test` and register each named mount once.
+Import `register` from `@fantasticdevhq/convex-tinybird/test` and register each named mount once.
 The helper registers its nested Workpool too. The example uses transaction limits in its test harness:
 
 <!-- example: example/convex/orders.test.ts -->

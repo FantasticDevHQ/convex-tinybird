@@ -11,7 +11,7 @@ function fixture(t) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const files = {
     "package.json": JSON.stringify({
-      name: "@fantastic-dev/convex-tinybird",
+      name: "@fantasticdevhq/convex-tinybird",
       version: "0.0.0",
       files: ["src", "dist", "CHANGELOG.md"],
     }),
@@ -58,12 +58,12 @@ test("rejects host references but permits the exact package name", (t) => {
   const { root, paths } = fixture(t);
   writeFileSync(
     join(root, "README.md"),
-    "@fantastic-dev/convex-tinybird @fantastic-dev/convex-tinybird/test",
+    "@fantasticdevhq/convex-tinybird @fantasticdevhq/convex-tinybird/test",
   );
   assert.deepEqual(checkPackedFiles(root, paths), []);
   writeFileSync(join(root, "README.md"), "@fantastic-dev/backend");
   assert.match(checkPackedFiles(root, paths).join("\n"), /Host reference/);
-  writeFileSync(join(root, "README.md"), "@fantastic-dev/convex-tinybird-extra");
+  writeFileSync(join(root, "README.md"), "@fantasticdevhq/convex-tinybird-extra");
   assert.match(checkPackedFiles(root, paths).join("\n"), /Host reference/);
 });
 

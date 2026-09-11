@@ -1,4 +1,4 @@
-import tinybird from "@fantastic-dev/convex-tinybird/convex.config";
+import tinybird from "@fantasticdevhq/convex-tinybird/convex.config";
 import { defineApp } from "convex/server";
 
 const app = defineApp();

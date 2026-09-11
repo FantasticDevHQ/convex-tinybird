@@ -242,12 +242,12 @@ export function scanRootsFor(root) {
     // So the example is scanned for IMPORTS only. That is the claim it exists to support: the
     // component is portable, and the one app demonstrating it reaches for nothing a consumer
     // outside this monorepo could not. It may import the component — that is the entire point —
-    // but nothing else under `@fantastic-dev/`, narrowed to this exact package rather than the
-    // scope so an example reaching for `@fantastic-dev/backend` still fails.
+    // (now `@fantasticdevhq/convex-tinybird`) but nothing under the host scope `@fantastic-dev/`; the
+    // allowance names this exact package so an example reaching for `@fantastic-dev/backend` still fails.
     {
       label: "example/convex",
       dir: join(root, "example", "convex"),
-      selfImportAllowed: /^@fantastic-dev\/convex-tinybird(\/|$)/,
+      selfImportAllowed: /^@fantasticdevhq\/convex-tinybird(\/|$)/,
       sourcePatterns: [],
     },
   ];

@@ -35,7 +35,7 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: "@fantastic-dev"
+          scope: "@fantasticdevhq"
       - name: Require the tag to match package.json
         env:
           TAG: ${{ github.ref_name }}

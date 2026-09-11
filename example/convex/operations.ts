@@ -1,4 +1,4 @@
-import { TinybirdDelivery, vFailureCategory } from "@fantastic-dev/convex-tinybird";
+import { TinybirdDelivery, vFailureCategory } from "@fantasticdevhq/convex-tinybird";
 import { v } from "convex/values";
 
 import { components } from "./_generated/api";

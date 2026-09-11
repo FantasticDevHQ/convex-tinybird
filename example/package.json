@@ -1,5 +1,5 @@
 {
-  "name": "@fantastic-dev/convex-tinybird-example",
+  "name": "@fantasticdevhq/convex-tinybird-example",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@fantastic-dev/convex-tinybird": "workspace:*",
+    "@fantasticdevhq/convex-tinybird": "workspace:*",
     "convex": "^1.44.0"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
-import { TinybirdDelivery } from "@fantastic-dev/convex-tinybird";
-import { register } from "@fantastic-dev/convex-tinybird/test";
+import { TinybirdDelivery } from "@fantasticdevhq/convex-tinybird";
+import { register } from "@fantasticdevhq/convex-tinybird/test";
 import { convexTest } from "convex-test";
 import { afterEach, expect, it, vi } from "vitest";
 

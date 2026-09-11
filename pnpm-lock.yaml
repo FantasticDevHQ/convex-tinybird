@@ -36,7 +36,7 @@ importers:
 
   example:
     dependencies:
-      '@fantastic-dev/convex-tinybird':
+      '@fantasticdevhq/convex-tinybird':
         specifier: workspace:*
         version: link:..
       convex:

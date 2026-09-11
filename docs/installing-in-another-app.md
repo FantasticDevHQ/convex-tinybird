@@ -30,11 +30,11 @@ point independent infrastructure projects at one workspace and assume their depl
 
 ## Install the component
 
-The package is published to GitHub Packages as `@fantastic-dev/convex-tinybird`; the repository
+The package is published to GitHub Packages as `@fantasticdevhq/convex-tinybird`; the repository
 is private for now, so installs need a token with `read:packages` as described in
 [Adoption](adoption.md). Add the pinned version to the consuming backend's dependencies together
 with its compatible `convex` peer version from [package.json](../package.json), map the
-`@fantastic-dev` scope to `https://npm.pkg.github.com` in that app's `.npmrc`, and run
+`@fantasticdevhq` scope to `https://npm.pkg.github.com` in that app's `.npmrc`, and run
 `pnpm install` (or `npm install`). Its source imports only Convex and its nested Workpool
 dependency. This repository's TypeScript configuration is development tooling, not something the
 consuming app must adopt.

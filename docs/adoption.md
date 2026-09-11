@@ -1,23 +1,23 @@
 # Adoption
 
-The package is published to GitHub Packages under the `@fantastic-dev` scope. While the repository
+The package is published to GitHub Packages under the `@fantasticdevhq` scope. While the repository
 is private, installing it needs a GitHub token with `read:packages` for an account that can see
 `FantasticDevHQ/convex-tinybird`. Map the scope to GitHub Packages in the consuming app's `.npmrc`
 and supply the token through the environment; never commit a token:
 
 ```ini
-@fantastic-dev:registry=https://npm.pkg.github.com
+@fantasticdevhq:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
 ```
 
 Then install the pinned version alongside Convex:
 
 ```bash
-NODE_AUTH_TOKEN=<token> npm install @fantastic-dev/convex-tinybird@0.1.0 convex@^1.44.0
+NODE_AUTH_TOKEN=<token> npm install @fantasticdevhq/convex-tinybird@0.1.0 convex@^1.44.0
 ```
 
 pnpm reads the same `.npmrc`. In GitHub Actions, `actions/setup-node` with
-`registry-url: https://npm.pkg.github.com` and `scope: "@fantastic-dev"` writes the mapping for
+`registry-url: https://npm.pkg.github.com` and `scope: "@fantasticdevhq"` writes the mapping for
 you; set `NODE_AUTH_TOKEN` on the install step to a token that can read the package (the
 workflow's own `GITHUB_TOKEN` once the package grants that repository access, or a fine-grained
 token stored as a secret).
@@ -33,7 +33,7 @@ Create or update your app's `convex/convex.config.ts`:
 
 ```ts
 import { defineApp } from "convex/server";
-import tinybird from "@fantastic-dev/convex-tinybird/convex.config";
+import tinybird from "@fantasticdevhq/convex-tinybird/convex.config";
 
 const app = defineApp();
 app.use(tinybird, {
@@ -55,7 +55,7 @@ Run `npx convex dev` to generate this app's component bindings and deploy its fu
 In an existing authenticated host mutation, construct the client from the generated mount and enqueue alongside the domain write:
 
 ```ts
-import { TinybirdDelivery } from "@fantastic-dev/convex-tinybird";
+import { TinybirdDelivery } from "@fantasticdevhq/convex-tinybird";
 import { components } from "./_generated/api";
 
 const analytics = new TinybirdDelivery(components.events);
@@ -74,7 +74,7 @@ Use `analytics.status(ctx, { datasource: "tickets", eventId: ticketId + ":opened
 
 ## Verify and upgrade
 
-The package's `scripts/clean-consumer.sh` runs the packed archive in an independent ticket app; with `CONVEX_TINYBIRD_CONSUMER_SPEC=@fantastic-dev/convex-tinybird@<version>` and a `NODE_AUTH_TOKEN` it installs that published version from GitHub Packages instead. Its delivery test imports `register` from the public `test` export and stubs fetch, so it needs no Tinybird credentials. Use the repository's Node 24.19 toolchain when running this maintainer check. Its anonymous Convex deployment and app files are temporary.
+The package's `scripts/clean-consumer.sh` runs the packed archive in an independent ticket app; with `CONVEX_TINYBIRD_CONSUMER_SPEC=@fantasticdevhq/convex-tinybird@<version>` and a `NODE_AUTH_TOKEN` it installs that published version from GitHub Packages instead. Its delivery test imports `register` from the public `test` export and stubs fetch, so it needs no Tinybird credentials. Use the repository's Node 24.19 toolchain when running this maintainer check. Its anonymous Convex deployment and app files are temporary.
 
 For your app's own integration tests, install Vitest, Vite and `convex-test` as development dependencies, register each mount with the package test helper, and stub all outgoing delivery requests. The helper is TypeScript source and requires Vitest's glob transform, as does Workpool's helper.
 

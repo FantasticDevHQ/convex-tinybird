@@ -6,7 +6,7 @@ the public API end to end. It is the developer sandbox and the portability proof
 ## What it is proving
 
 The component has to work in an application that knows nothing about it. So this app has an
-ordinary domain schema (`orders`), imports `convex` and `@fantastic-dev/convex-tinybird` and
+ordinary domain schema (`orders`), imports `convex` and `@fantasticdevhq/convex-tinybird` and
 nothing else, and mounts the component twice under different names.
 
 Two mounts rather than one is deliberate. The component's own test suite registers a single
@@ -16,7 +16,7 @@ switch stopping both streams, would pass there and fail here.
 ## What is enforced, and by what
 
 - **Runtime dependencies** are enforced by `scripts/check-boundary.mjs`, which scans
-  `example/convex` as well as `src`. It permits `@fantastic-dev/convex-tinybird` and rejects
+  `example/convex` as well as `src`. It permits `@fantasticdevhq/convex-tinybird` and rejects
   every other `@fantastic-dev/` package, `packages/backend`, and Better Auth. Component-only
   restrictions on identity reads do not apply to the host example.
 - **The tsconfig mirrors the package's own compiler flags**, and that is not a hole in the claim:

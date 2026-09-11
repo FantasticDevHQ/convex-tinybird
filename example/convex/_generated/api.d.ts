@@ -53,6 +53,6 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {
-  productEvents: import("@fantastic-dev/convex-tinybird/_generated/component.js").ComponentApi<"productEvents">;
-  auditEvents: import("@fantastic-dev/convex-tinybird/_generated/component.js").ComponentApi<"auditEvents">;
+  productEvents: import("@fantasticdevhq/convex-tinybird/_generated/component.js").ComponentApi<"productEvents">;
+  auditEvents: import("@fantasticdevhq/convex-tinybird/_generated/component.js").ComponentApi<"auditEvents">;
 };

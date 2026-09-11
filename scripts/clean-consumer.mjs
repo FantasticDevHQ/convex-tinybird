@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /**
  * By default the consumer installs the tarball this checkout packs. Set
- * CONVEX_TINYBIRD_CONSUMER_SPEC to a registry spec (e.g. `@fantastic-dev/convex-tinybird@0.1.0`)
+ * CONVEX_TINYBIRD_CONSUMER_SPEC to a registry spec (e.g. `@fantasticdevhq/convex-tinybird@0.1.0`)
  * to install a PUBLISHED version instead; that is the release gate's proof that the registry
  * artifact, not the local tree, works in an independent app. A published spec is read from the
  * private GitHub Packages registry, so the caller must also supply NODE_AUTH_TOKEN with
