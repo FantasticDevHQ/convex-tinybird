@@ -434,6 +434,7 @@ guarantee here and being explicit about where it comes from.
 
 `scripts/check-boundary.mjs` rejects any host workspace import, `packages/backend`, Better Auth or
 package-escaping import under `src/` and any runtime dependency outside `convex` and
-`@convex-dev/workpool`. The package is built inside the Fantastic.dev monorepo as a workspace
-package and is meant to move to its own repository and npm once the first consumer is verified;
-because it never depended on the host, that move is a packaging change, not a migration.
+`@convex-dev/workpool`. The package was built inside the Fantastic.dev monorepo as a workspace
+package and moved to its own repository, `FantasticDevHQ/convex-tinybird`, once the first consumer
+was verified; because it never depended on the host, that move was a packaging change, not a
+migration.

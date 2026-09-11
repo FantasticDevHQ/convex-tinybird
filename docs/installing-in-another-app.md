@@ -30,13 +30,14 @@ point independent infrastructure projects at one workspace and assume their depl
 
 ## Install the component
 
-The package is currently private and unreleased. In a pnpm workspace that contains the package,
-add `"@fantastic-dev/convex-tinybird": "workspace:*"` to the consuming backend's dependencies and
-use its compatible `convex` peer version from [package.json](../package.json). Run `pnpm install`.
-An unrelated repository cannot install this name from npm yet; bring the component source into
-that repository's workspace until a published release is available. Its source imports only
-Convex and its nested Workpool dependency. The example's repository-level TypeScript configuration
-is development tooling, not something the consuming app must adopt.
+The package is published to GitHub Packages as `@fantastic-dev/convex-tinybird`; the repository
+is private for now, so installs need a token with `read:packages` as described in
+[Adoption](adoption.md). Add the pinned version to the consuming backend's dependencies together
+with its compatible `convex` peer version from [package.json](../package.json), map the
+`@fantastic-dev` scope to `https://npm.pkg.github.com` in that app's `.npmrc`, and run
+`pnpm install` (or `npm install`). Its source imports only Convex and its nested Workpool
+dependency. This repository's TypeScript configuration is development tooling, not something the
+consuming app must adopt.
 
 Use the [mount configuration in the README](../README.md#install-and-mount) and keep mount names
 stable. `productEvents` and `auditEvents` demonstrate two mounts with separate host variable names.

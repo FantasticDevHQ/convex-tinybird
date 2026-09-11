@@ -489,10 +489,10 @@ secrets scan, codegen freshness, every gate self-test, and the example app's own
 tests:
 
 ```bash
-pnpm --filter @fantastic-dev/convex-tinybird run check
+pnpm run check
 ```
 
-CI runs the same gates through `pnpm run check:scripts`, and needs no Tinybird credentials to do
+CI runs the same command, and needs no Tinybird credentials to do
 it: the suites refuse network access outright (`vitest.setup.ts` installs a `fetch` that rejects
 until a test stubs it), so there is nothing to authenticate against.
 
@@ -538,16 +538,18 @@ points to shared tooling, report the reproduction there instead of weakening com
 
 ## Package artifact
 
-Workspace installation builds the package through `prepare`, so lint, tests and development commands can resolve exports on a fresh checkout. Run `pnpm --filter @fantastic-dev/convex-tinybird build` to rebuild ESM and TypeScript declarations in `dist` after source changes. Client, browser and component configuration exports use the compiled files. The `test` export retains its TypeScript source for Vitest's `import.meta.glob` transform, matching the Workpool test helper. Component source and installation documentation are included in the archive.
+Installation builds the package through `prepare`, so tests and development commands can resolve exports on a fresh checkout. Run `pnpm run build` to rebuild ESM and TypeScript declarations in `dist` after source changes. Client, browser and component configuration exports use the compiled files. The `test` export retains its TypeScript source for Vitest's `import.meta.glob` transform, matching the Workpool test helper. Component source and installation documentation are included in the archive.
 
-Run `pnpm --filter @fantastic-dev/convex-tinybird check:pack` to check npm's dry-run file list, reject unexpected files and host references, and resolve runtime exports from an extracted tarball. This maintainer gate requires Node, pnpm, npm, `tar` and a symlink-capable filesystem; run it on macOS or Linux, matching CI. It also runs in the repository's `check:scripts`. `npm pack` builds through `prepack`; this package remains private until its separately verified release. Test suites, fixtures, example apps and environment files are excluded.
+Run `pnpm run check:pack` to check npm's dry-run file list, reject unexpected files and host references, and resolve runtime exports from an extracted tarball. This maintainer gate requires Node, pnpm, npm, `tar` and a symlink-capable filesystem; run it on macOS or Linux, matching CI. It is part of `pnpm run check`. `npm pack` builds through `prepack`. Test suites, fixtures, example apps and environment files are excluded.
+
+Releases are published to GitHub Packages by the `Release` workflow when a `vX.Y.Z` tag is pushed; the workflow refuses a tag that does not match `package.json` and `CHANGELOG.md`, runs the full check, publishes with the workflow's own token, and creates the GitHub release. There is no long-lived registry token.
 
 The package is licensed under Apache-2.0. See [LICENSE](LICENSE) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Adoption and upgrades
 
-Follow [Adoption from a tarball](docs/adoption.md) to install in a separate app, mount the component, configure its environment and enqueue the first event. The package is still private; the guide uses a locally built archive until a release is published. Provision Tinybird separately for each app and environment using [Install in another app](docs/installing-in-another-app.md).
+Follow [Adoption](docs/adoption.md) to install the published version from GitHub Packages in a separate app, mount the component, configure its environment and enqueue the first event. Provision Tinybird separately for each app and environment using [Install in another app](docs/installing-in-another-app.md).
 
-Run `pnpm run check:tinybird-consumer` from the repository root with its Node 24.19 toolchain, or run `bash scripts/clean-consumer.sh` from this package. It installs the archive and Convex as the only direct runtime dependencies of a temporary app outside the workspace. Development tools are installed separately. It runs anonymous local Convex setup, explicit codegen, typechecking and a test with stubbed delivery. The fixture uses a `tickets` table and its own `workspaceKey` tenancy field. It rejects unauthorized reads, uses no workspace aliases, and deletes the temporary app when finished. It needs registry and Convex binary-download access; no cloud credentials or Tinybird workspace are needed. CI runs this as a required job for package and installation changes.
+Run `bash scripts/clean-consumer.sh` with the repository's Node 24.19 toolchain. It installs the archive (or, with `CONVEX_TINYBIRD_CONSUMER_SPEC` and a `NODE_AUTH_TOKEN`, a published version) and Convex as the only direct runtime dependencies of a temporary app outside the workspace. Development tools are installed separately. It runs anonymous local Convex setup, explicit codegen, typechecking and a test with stubbed delivery. The fixture uses a `tickets` table and its own `workspaceKey` tenancy field. It rejects unauthorized reads, uses no workspace aliases, and deletes the temporary app when finished. It needs registry and Convex binary-download access; no cloud credentials or Tinybird workspace are needed. CI runs this as a required job for package and installation changes.
 
 After publication, releases follow semantic versioning: patch releases fix compatible behavior, minor releases add compatible capabilities, and major releases may change the API or event contract. During `0.x`, treat minor upgrades as potentially breaking and review the changelog. Pin the version adopted by your app, upgrade first in staging, and rerun its delivery/read tests. Regenerate the consumer's `_generated` bindings with `convex dev` after mounting or upgrading; do not copy another app's generated bindings or manually edit the package internals. Source checkout users rebuild after changes; archive users receive the compiled artifacts.

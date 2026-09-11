@@ -2,7 +2,7 @@
 /**
  * check-boundary.mjs — keep the Tinybird component project-agnostic.
  *
- *   node packages/convex-tinybird/scripts/check-boundary.mjs [packageRoot]
+ *   node scripts/check-boundary.mjs [packageRoot]
  *
  * The component must be reusable in any Convex app, so nothing under `src/` may reach into the
  * Fantastic.dev monorepo (workspace packages, the backend, its generated types, Better Auth) or

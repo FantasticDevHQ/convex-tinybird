@@ -19,8 +19,8 @@ switch stopping both streams, would pass there and fail here.
   `example/convex` as well as `src`. It permits `@fantastic-dev/convex-tinybird` and rejects
   every other `@fantastic-dev/` package, `packages/backend`, and Better Auth. Component-only
   restrictions on identity reads do not apply to the host example.
-- **The tsconfig extends the repository's base**, and that is not a hole in the claim: it is a
-  build setting, not a dependency, and a real consumer writes their own. The dependency claim
+- **The tsconfig mirrors the package's own compiler flags**, and that is not a hole in the claim:
+  it is a build setting, not a dependency, and a real consumer writes their own. The dependency claim
   lives in `package.json` and in the boundary script, both of which are checked.
 
 ## Running it
@@ -31,9 +31,9 @@ both host and token variables for each mount. The generic `events` datasource is
 example. The tests below stub transport and do not provision Tinybird cloud resources.
 
 ```bash
-pnpm --filter @fantastic-dev/convex-tinybird-example run test       # convex-test, no network
-pnpm --filter @fantastic-dev/convex-tinybird-example run typecheck
-CONVEX_AGENT_MODE=anonymous pnpm --filter @fantastic-dev/convex-tinybird-example exec convex dev --once
+pnpm --dir example run test       # convex-test, no network
+pnpm --dir example run typecheck
+CONVEX_AGENT_MODE=anonymous pnpm --dir example exec convex dev --once
 ```
 
 **Credentials must be set on the DEPLOYMENT, not in your shell.** The `process.env.…` reads in
@@ -44,7 +44,7 @@ nothing is scheduled, and no request leaves. There is no error anywhere. Verific
 all three legs; only this works:
 
 ```bash
-cd packages/convex-tinybird/example
+cd example
 
 # FIRST. `convex env set` writes to a deployment, so there has to be one — on a fresh clone this
 # line is the difference between the block working and `✖ No CONVEX_DEPLOYMENT set`. It is the

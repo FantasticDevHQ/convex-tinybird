@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.convex/
+.env
+.env.*
+!.env.example
+.tinybird-codegen-*/
+*.tgz
+.DS_Store

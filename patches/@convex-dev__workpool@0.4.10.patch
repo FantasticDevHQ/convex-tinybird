@@ -1,0 +1,13 @@
+diff --git a/src/component/shared.ts b/src/component/shared.ts
+index 371db8bbf..3bcc94492 100644
+--- a/src/component/shared.ts
++++ b/src/component/shared.ts
+@@ -70,7 +70,7 @@ export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
+   base: 2,
+ };
+ // This ensures that the type satisfies the schema.
+-const _ = {} as RetryBehavior satisfies Infer<typeof retryBehavior>;
++void ({} as RetryBehavior satisfies Infer<typeof retryBehavior>);
+ 
+ export const vResult = vRunResult(v.any());
+ export function vRunResult<RV extends Validator<any, any, any> = VAny>(

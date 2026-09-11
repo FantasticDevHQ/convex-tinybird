@@ -16,15 +16,29 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+/**
+ * By default the consumer installs the tarball this checkout packs. Set
+ * CONVEX_TINYBIRD_CONSUMER_SPEC to a registry spec (e.g. `@fantastic-dev/convex-tinybird@0.1.0`)
+ * to install a PUBLISHED version instead; that is the release gate's proof that the registry
+ * artifact, not the local tree, works in an independent app. A published spec is read from the
+ * private GitHub Packages registry, so the caller must also supply NODE_AUTH_TOKEN with
+ * `read:packages`; it is passed through to npm only, never to Convex.
+ */
+const consumerSpec = process.env.CONVEX_TINYBIRD_CONSUMER_SPEC;
 const environment = Object.fromEntries(
-  Object.entries(process.env).filter(([key]) => !/CONVEX|TINYBIRD/u.test(key)),
+  Object.entries(process.env).filter(
+    ([key]) => !/CONVEX|TINYBIRD/u.test(key) && key !== "NODE_AUTH_TOKEN",
+  ),
 );
 environment.CONVEX_AGENT_MODE = "anonymous";
+const installEnvironment = process.env.NODE_AUTH_TOKEN
+  ? { ...environment, NODE_AUTH_TOKEN: process.env.NODE_AUTH_TOKEN }
+  : environment;
 
-function run(command, args, cwd, timeout = 180000) {
+function run(command, args, cwd, timeout = 180000, env = environment) {
   const result = spawnSync(command, args, {
     cwd,
-    env: environment,
+    env,
     encoding: "utf8",
     timeout,
     maxBuffer: 8 * 1024 * 1024,
@@ -50,8 +64,17 @@ if (existsSync(join(homedir(), ".convex/anonymous-convex-backend-state/anonymous
 const temp = mkdtempSync(join(tmpdir(), "tinybird-clean-consumer-"));
 try {
   process.stdout.write(`Clean consumer: ${temp}\n`);
-  const packed = JSON.parse(run("npm", ["pack", "--json", "--pack-destination", temp], root));
-  const tarball = join(temp, packed[0].filename);
+  const name = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).name;
+  let spec;
+  if (consumerSpec) {
+    if (!consumerSpec.startsWith(`${name}@`))
+      throw new Error(`CONVEX_TINYBIRD_CONSUMER_SPEC must be ${name}@<version>, got ${consumerSpec}`);
+    spec = consumerSpec;
+    process.stdout.write(`Installing the published ${spec} from GitHub Packages.\n`);
+  } else {
+    const packed = JSON.parse(run("npm", ["pack", "--json", "--pack-destination", temp], root));
+    spec = `file:${join(temp, packed[0].filename)}`;
+  }
   const consumer = join(temp, "app");
   mkdirSync(consumer);
   const fixture = join(root, "scripts/clean-consumer");
@@ -64,13 +87,12 @@ try {
     mkdirSync(dirname(destination), { recursive: true });
     cpSync(source, destination);
   }
-  const name = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).name;
   const manifest = {
     name: "helpdesk-portability-check",
     version: "0.0.0",
     private: true,
     type: "module",
-    dependencies: { [name]: `file:${tarball}`, convex: installedVersion("convex") },
+    dependencies: { [name]: spec, convex: installedVersion("convex") },
     devDependencies: Object.fromEntries(
       ["typescript", "vitest", "vite", "convex-test", "@types/node"].map((name) => [
         name,
@@ -79,15 +101,33 @@ try {
     ),
   };
   writeFileSync(join(consumer, "package.json"), JSON.stringify(manifest, null, 2));
-  run("npm", ["install", "--no-audit", "--no-fund"], consumer, 300000);
+  if (consumerSpec) {
+    // Scope-only registry mapping; the token comes from NODE_AUTH_TOKEN and is never written.
+    writeFileSync(
+      join(consumer, ".npmrc"),
+      [
+        `${name.slice(0, name.indexOf("/"))}:registry=https://npm.pkg.github.com`,
+        "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}",
+        "",
+      ].join("\n"),
+    );
+  }
+  run("npm", ["install", "--no-audit", "--no-fund"], consumer, 300000, installEnvironment);
   const installed = realpathSync(join(consumer, "node_modules", name));
   if (!installed.startsWith(realpathSync(consumer) + "/"))
     throw new Error("Component resolved outside the independent consumer");
   const lock = JSON.parse(readFileSync(join(consumer, "package-lock.json"), "utf8"));
-  if (lock.packages[`node_modules/${name}`]?.link)
-    throw new Error("Consumer used a workspace link instead of the tarball");
+  const entry = lock.packages[`node_modules/${name}`];
+  if (entry?.link) throw new Error("Consumer used a workspace link instead of the artifact");
+  if (consumerSpec) {
+    const expected = consumerSpec.slice(name.length + 1);
+    if (entry?.version !== expected || !/^https:\/\/npm\.pkg\.github\.com\//u.test(entry?.resolved ?? ""))
+      throw new Error(
+        `Consumer did not install ${name}@${expected} from GitHub Packages (got ${entry?.version} from ${entry?.resolved})`,
+      );
+  }
   process.stdout.write(
-    "Installed tarball and Convex as the only direct runtime dependencies; no workspace links.\n",
+    `Installed ${consumerSpec ? "the published version" : "the tarball"} and Convex as the only direct runtime dependencies; no workspace links.\n`,
   );
 
   // First initialize a disposable anonymous local backend, then explicitly exercise codegen.

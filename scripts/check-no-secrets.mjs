@@ -2,7 +2,7 @@
 /**
  * check-no-secrets.mjs — keep credentials and logging out of the component's sources.
  *
- *   node packages/convex-tinybird/scripts/check-no-secrets.mjs [packageRoot]
+ *   node scripts/check-no-secrets.mjs [packageRoot]
  *
  * Two rules, both about things that are invisible in a passing test suite.
  *

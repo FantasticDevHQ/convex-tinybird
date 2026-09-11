@@ -1,0 +1,16 @@
+packages:
+  # The example app mounts two named instances of the component and is a workspace member so
+  # that `convex` and the component resolve for it. It exists to prove the component works with
+  # those two dependencies and nothing else.
+  - "example"
+
+patchedDependencies:
+  # Workpool's "./test" export is raw TypeScript source, not a build, so registering the pool in
+  # convex-test typechecks Workpool's own sources under this repository's flags. One
+  # type-assertion idiom there (`const _ = {} as X satisfies Y`) trips `noUnusedLocals`. The
+  # patch keeps the assertion and drops the binding. Revisit on upgrade: if upstream ships a
+  # built `./test`, or fixes the line, this patch can go.
+  "@convex-dev/workpool@0.4.10": "patches/@convex-dev__workpool@0.4.10.patch"
+
+allowBuilds:
+  esbuild: true
