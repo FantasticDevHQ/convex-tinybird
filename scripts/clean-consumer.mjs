@@ -69,8 +69,11 @@ try {
   if (consumerSpec) {
     if (!consumerSpec.startsWith(`${name}@`))
       throw new Error(`CONVEX_TINYBIRD_CONSUMER_SPEC must be ${name}@<version>, got ${consumerSpec}`);
-    spec = consumerSpec;
-    process.stdout.write(`Installing the published ${spec} from GitHub Packages.\n`);
+    // The manifest takes the VERSION only: npm reads a full `name@version` value as an alias
+    // spec and installs a self-link instead of the registry artifact (found the first time this
+    // ran against the real registry).
+    spec = consumerSpec.slice(name.length + 1);
+    process.stdout.write(`Installing the published ${consumerSpec} from GitHub Packages.\n`);
   } else {
     const packed = JSON.parse(run("npm", ["pack", "--json", "--pack-destination", temp], root));
     spec = `file:${join(temp, packed[0].filename)}`;
