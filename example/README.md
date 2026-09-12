@@ -25,7 +25,7 @@ switch stopping both streams, would pass there and fail here.
 
 ## Running it
 
-For real delivery, first follow [Install in another app](../docs/installing-in-another-app.md).
+For real delivery, first follow [Install and configure](../docs/adoption.md) and [Tinybird setup](../docs/tinybird-setup.md).
 Provision destinations with schemas matching this app's `orders` and audit payloads, and set
 both host and token variables for each mount. The generic `events` datasource is a separate
 example. The tests below stub transport and do not provision Tinybird cloud resources.

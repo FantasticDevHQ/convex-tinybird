@@ -1,9 +1,15 @@
-# Adoption
+# Install and configure
 
-The package is published to GitHub Packages under the `@fantasticdevhq` scope. While the repository
-is private, installing it needs a GitHub token with `read:packages` for an account that can see
-`FantasticDevHQ/convex-tinybird`. Map the scope to GitHub Packages in the consuming app's `.npmrc`
-and supply the token through the environment; never commit a token:
+This is the consumer guide: install the published package, mount the component, put its
+credentials on the Convex deployment, send a first event, and upgrade safely. Tinybird-side
+provisioning (workspaces, schema, tokens, browser reads) is in [Tinybird setup](tinybird-setup.md).
+
+## Install from GitHub Packages
+
+The package is published to GitHub Packages under the `@fantasticdevhq` scope. While the
+repository is private, installing it needs a GitHub token with `read:packages` for an account
+that can see `FantasticDevHQ/convex-tinybird`. Map the scope to GitHub Packages in your app's
+`.npmrc` and keep the token in your user-level config or the environment; never commit a token:
 
 ```ini
 @fantasticdevhq:registry=https://npm.pkg.github.com
@@ -16,18 +22,19 @@ Then install the pinned version alongside Convex:
 NODE_AUTH_TOKEN=<token> npm install @fantasticdevhq/convex-tinybird@0.1.0 convex@^1.44.0
 ```
 
-pnpm reads the same `.npmrc`. In GitHub Actions, `actions/setup-node` with
-`registry-url: https://npm.pkg.github.com` and `scope: "@fantasticdevhq"` writes the mapping for
-you; set `NODE_AUTH_TOKEN` on the install step to a token that can read the package (the
-workflow's own `GITHUB_TOKEN` once the package grants that repository access, or a fine-grained
-token stored as a secret).
+pnpm reads the same `.npmrc`, with one difference: pnpm refuses to expand a credential from a
+committed project `.npmrc`, so with pnpm put the `_authToken` line in `~/.npmrc` (or run
+`npm config set "//npm.pkg.github.com/:_authToken" <token> --location=user`) and keep only the
+scope line in the project file. In GitHub Actions, `actions/setup-node` with
+`registry-url: https://npm.pkg.github.com` and `scope: "@fantasticdevhq"` writes the user-level
+mapping for you; set `NODE_AUTH_TOKEN` on the install step to a token that can read the package
+(the workflow's own `GITHUB_TOKEN` once the package grants that repository access, or a
+fine-grained token stored as a secret).
 
-To try an unreleased checkout instead, run `npm pack` from the package directory and install the
-resulting archive path in place of the version. The app's only direct runtime dependencies for
-this integration are the component and Convex; Workpool is installed transitively. Test tooling
-belongs in development dependencies.
+The app's only direct runtime dependencies for this integration are the component and Convex;
+Workpool is installed transitively. Test tooling belongs in development dependencies.
 
-## Mount and configure
+## Mount
 
 Create or update your app's `convex/convex.config.ts`:
 
@@ -46,13 +53,57 @@ app.use(tinybird, {
 export default app;
 ```
 
-Provision this app's Tinybird datasource and append-only credential using [Install in another app](installing-in-another-app.md). Set the corresponding `TINYBIRD_TOKEN` and regional `TINYBIRD_HOST` in the intended Convex deployment's environment variables. Use separate credentials for each app/environment. Mounting does not create Tinybird resources. Never put append or signing credentials in frontend environment variables.
+Each mount has its own tables, settings, health, credentials and Workpool. Mount as many named
+instances as you have independent streams, and keep mount names stable: renaming a mount orphans
+its tables. The left-hand keys are the component's contract (`TINYBIRD_TOKEN`, `TINYBIRD_HOST`,
+and for browser reads `TINYBIRD_ADMIN_TOKEN`, `TINYBIRD_WORKSPACE_ID`); the right-hand
+`process.env.*` names are yours, so two mounts can read differently named variables.
 
-Run `npx convex dev` to generate this app's component bindings and deploy its functions. For a disposable local experiment, `CONVEX_AGENT_MODE=anonymous npx convex dev` sets up local Convex without a cloud account. Complete the host's own setup before using a production deployment.
+## Configure the Convex deployment
+
+**The variables live on the Convex deployment, not in a local `.env` file.** The `process.env.*`
+reads in `convex.config.ts` are evaluated by the Convex backend inside its own runtime, against
+that deployment's environment variables. A `.env.local` in your repo, a shell `export`, or a
+CI secret configures your tooling, not the backend. With no variables on the deployment the
+component is inert rather than broken: enqueue still stores events, nothing is scheduled, no
+request leaves, and no error is raised anywhere. That silence is why this section exists.
+
+Set the values with the Convex CLI from your backend directory, after selecting the intended
+deployment, and then push the configuration so the mounts receive it:
+
+```sh
+# Development deployment
+npx convex env set TINYBIRD_HOST "https://api.us-east.tinybird.co"
+npx convex env set TINYBIRD_TOKEN "$TINYBIRD_APPEND_TOKEN"   # supplied securely in the shell
+npx convex dev --once
+
+# Production deployment
+npx convex env set --prod TINYBIRD_HOST "https://api.us-east.tinybird.co"
+npx convex env set --prod TINYBIRD_TOKEN "$TINYBIRD_APPEND_TOKEN"
+npx convex deploy
+```
+
+Use the variable names your mount mapping reads (`PRODUCT_TINYBIRD_TOKEN` and so on if you
+renamed them). Set them separately on every deployment, with that environment's own Tinybird
+workspace and token; never point a preview or development deployment at production credentials.
+Re-push (`convex dev --once` or `convex deploy`) after changing a value: the mounts read the
+environment when the configuration is pushed, not on every request. You can also set the
+variables in the Convex dashboard under Settings → Environment Variables; the same re-push rule
+applies.
+
+Always set `TINYBIRD_HOST` explicitly, even though the component has a default: use the exact
+[regional API origin](https://www.tinybird.co/docs/api-reference), not the dashboard URL.
+Tinybird Local (`http://127.0.0.1:7181`) only works from a local Convex backend that can reach
+your loopback address; a hosted deployment cannot reach it.
+
+Run `npx convex dev` to generate the app's component bindings and deploy its functions. For a
+disposable experiment, `CONVEX_AGENT_MODE=anonymous npx convex dev` sets up a local Convex
+backend without a cloud account.
 
 ## First event
 
-In an existing authenticated host mutation, construct the client from the generated mount and enqueue alongside the domain write:
+In an existing authenticated host mutation, construct the client from the generated mount and
+enqueue alongside the domain write:
 
 ```ts
 import { TinybirdDelivery } from "@fantasticdevhq/convex-tinybird";
@@ -68,14 +119,30 @@ await analytics.enqueue(ctx, {
 });
 ```
 
-Replace the example datasource and payload with your deployed Tinybird schema. Choose a stable event ID and retain the same payload for retries of that identity. The host owns authentication and tenancy. The component accepts opaque data and does not infer a resource table or an authorization model.
+Replace the example datasource and payload with your deployed Tinybird schema. Choose a stable
+event ID and retain the same payload for retries of that identity. The host owns authentication
+and tenancy. The component accepts opaque data and does not infer a resource table or an
+authorization model.
 
-Use `analytics.status(ctx, { datasource: "tickets", eventId: ticketId + ":opened" })` from an authorized host query to verify delivery. Acceptance into the outbox is not delivery; expect state `delivered` after the worker's request succeeds. With no append credential, enqueue retains the event without scheduling delivery. See the package README for health, replay and retention operations.
+## Verify delivery
 
-## Verify and upgrade
+Use `analytics.status(ctx, { datasource: "tickets", eventId: ticketId + ":opened" })` from an
+authorized host query. Acceptance into the outbox is not delivery; expect state `delivered`
+after the worker's request succeeds. `health.configured` reports whether an append token is
+present on the deployment, which is the first thing to check when events sit in `pending`.
+The full pre-production checklist, including a synthetic event and a duplicate-safe read, is in
+[Verify before enabling producers](tinybird-setup.md#verify-before-enabling-producers). The
+package README covers health, pause and resume, replay and retention.
 
-The package's `scripts/clean-consumer.sh` runs the packed archive in an independent ticket app; with `CONVEX_TINYBIRD_CONSUMER_SPEC=@fantasticdevhq/convex-tinybird@<version>` and a `NODE_AUTH_TOKEN` it installs that published version from GitHub Packages instead. Its delivery test imports `register` from the public `test` export and stubs fetch, so it needs no Tinybird credentials. Use the repository's Node 24.19 toolchain when running this maintainer check. Its anonymous Convex deployment and app files are temporary.
+## Upgrade
 
-For your app's own integration tests, install Vitest, Vite and `convex-test` as development dependencies, register each mount with the package test helper, and stub all outgoing delivery requests. The helper is TypeScript source and requires Vitest's glob transform, as does Workpool's helper.
+Review the changelog for every upgrade. Published versions follow semantic versioning; during
+`0.x`, minor versions can break compatibility. Pin a reviewed version, deploy and test staging
+first, and run `convex dev` to regenerate your app's `_generated` bindings. Verify your
+datasource migrations separately before production enablement. Do not modify package internals
+to adapt it to your schema.
 
-Review the changelog for every upgrade. Published versions follow semantic versioning; during `0.x`, minor versions can break compatibility. Pin a reviewed version, deploy and test staging first, and run `convex dev` to regenerate your app's `_generated` bindings. Verify your datasource migrations separately before production enablement. Do not manually modify package internals to adapt it to your schema.
+For your app's own integration tests, install Vitest, Vite and `convex-test` as development
+dependencies, register each mount with the package's `test` helper, and stub all outgoing
+delivery requests. The helper is TypeScript source and requires Vitest's glob transform, as does
+Workpool's helper. See [Testing against it](../README.md#testing-against-it).

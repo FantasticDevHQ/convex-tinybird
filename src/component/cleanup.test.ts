@@ -101,7 +101,7 @@ describe("retention cleanup", () => {
   });
 
   it("deletes the payload row with its event, leaving no orphan", async () => {
-    // The precondition FTD-2525 attached to this ticket. An orphaned payload is a silent
+    // The precondition the payload split introduced. An orphaned payload is a silent
     // leak: the whole point of the split was to make the counted table cheap, so bytes
     // stranded in the uncounted one are invisible by construction.
     vi.stubGlobal("fetch", vi.fn());
@@ -132,7 +132,7 @@ describe("retention cleanup", () => {
   });
 
   it("is not wedged by a dead letter whose payload has already gone", async () => {
-    // The reachable one, and it stops retention for EVERY row rather than one. FTD-2531
+    // The reachable one, and it stops retention for EVERY row rather than one. Delivery
     // dead-letters an event whose payload row is missing — and nothing clears `payloadId`
     // when that happens, because the row vanished by some means outside this component. So
     // the pointer is stale, `ctx.db.delete` on it throws `Delete on non-existent doc`, and

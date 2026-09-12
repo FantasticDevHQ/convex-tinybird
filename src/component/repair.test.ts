@@ -243,7 +243,7 @@ describe("repairing a lost payload", () => {
     // The third state a repair can find, and the one that must NOT be requeued: a
     // `delivering` row is mid-attempt by definition, so returning it to `pending` would be
     // the same double-delivery the guard exists to prevent. Recovering one that is genuinely
-    // stuck is FTD-2500's job, not enqueue's.
+    // stuck is the recovery sweep's job, not enqueue's.
     //
     // This is also what stops the returned `state` being a prediction. Every other repair
     // path requeues, so `pending` was true by accident; here it is not.

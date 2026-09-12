@@ -193,7 +193,7 @@ export const onDeliveryComplete = internalMutation({
     // Both are refused by the same check, and BOTH halves are load bearing. The argument
     // that the verdict half was unreachable — that a row the pool reports `failed` for is
     // `pending` rather than `failed`, and so cannot have been replayed — stopped holding
-    // when FTD-2531 made `enqueue` able to requeue a `pending` row to repair a lost payload.
+    // when the missing-payload repair made `enqueue` able to requeue a `pending` row.
     // A completion can now arrive for an item the row no longer holds while it is still
     // `pending`, which is precisely how a repaired row lost its dead letter before the
     // requeue itself was guarded.

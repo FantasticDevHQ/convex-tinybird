@@ -1,6 +1,6 @@
 # Generic Tinybird example
 
-For a new consuming app, follow [Install in another app](../docs/installing-in-another-app.md)
+For a new consuming app, follow [Tinybird setup](../docs/tinybird-setup.md)
 first. It covers workspace provisioning, schema deployment, append and deployment tokens, and
 per-environment Convex configuration. This directory provides reference resources to copy into
 the host's infrastructure project; it does not configure a cloud workspace when the package is installed.

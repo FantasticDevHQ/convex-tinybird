@@ -92,7 +92,7 @@ async function liveWorkIds(
  * vanished with the process that carried it. Age alone cannot tell that apart from work that
  * is merely waiting, and getting this wrong is not a small error: requeueing a live delivery
  * gives the event a second work item and therefore a second retry budget, which is the
- * FTD-2531 defect, and it sends the event twice.
+ * double-delivery defect, and it sends the event twice.
  *
  * An earlier version of this used age as the criterion and was wrong in both directions:
  *
@@ -367,7 +367,7 @@ export const requeueStuck = mutation({
     // Recorded only when something was actually rescued. `lastOperatorAction` is a single slot
     // shared with pause, resume, both replays and cleanup, and this runs on a cron — writing
     // it on every no-op pass would erase the record of the last human action within a day,
-    // which is the defect FTD-2502 fixed for `cleanup`. Accepting `actor` and then never using
+    // which is the defect the retention cleanup once had. Accepting `actor` and then never using
     // it was the opposite failure: the README documents passing it and nothing was written.
     if (requeued > 0) {
       await patchSettings(ctx, {

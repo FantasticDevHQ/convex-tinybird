@@ -178,7 +178,7 @@ describe("the payload lives outside the counted row", () => {
 
   it("dead-letters an event whose payload row is gone, rather than stranding it", async () => {
     // Nothing in this component deletes from either table, so only a hand-built fixture or a
-    // future retention sweep can produce a payload-less event. Before FTD-2531 the delivery
+    // future retention sweep can produce a payload-less event. Before the missing-payload repair the delivery
     // action read a missing payload as "the event is gone" — a benign race — so the row sat
     // `pending` with `attempts: 0` and no error, unreachable by replay because replay takes
     // only `failed` rows, and re-queued by resume into the same silent skip forever. The only

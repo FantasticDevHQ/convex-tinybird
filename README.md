@@ -10,14 +10,13 @@ exactly-once ingestion or make raw additive aggregates safe.
 
 ## Install and mount
 
-Start with [Install in another app](./docs/installing-in-another-app.md) for the complete setup:
-per-app staging and production workspaces, host-owned schemas, scoped credentials, Convex
-deployment configuration, and delivery verification. Repeat that setup for each consuming app.
-Mounting this component does not provision Tinybird or reuse another app's infrastructure.
+Start with [Install and configure](./docs/adoption.md): install the published package from
+GitHub Packages, mount it, put its credentials on the Convex deployment, and send a first event.
+Then follow [Tinybird setup](./docs/tinybird-setup.md) for workspaces, schema, tokens, browser
+reads and the pre-production checklist. Mounting this component does not provision Tinybird.
 
-This is currently a private workspace package, not a published npm release. Add
-`@fantasticdevhq/convex-tinybird` as a workspace dependency alongside `convex`. The component's
-only runtime dependencies are Convex and Workpool; it imports no host schema or authentication.
+Install `@fantasticdevhq/convex-tinybird` alongside `convex`. The component's only runtime
+dependencies are Convex and Workpool; it imports no host schema or authentication.
 
 The [example configuration](./example/convex/convex.config.ts) mounts two independent streams:
 
@@ -70,6 +69,15 @@ The host supplies the component's declared variables through each mount's `env` 
 Component code reads the generated `env` export. Static credentials are not stored in component
 tables, returned by functions, or logged. Only the scoped, short-lived read JWT is returned.
 
+**Set these on the Convex deployment, not in a local `.env` file.** The `process.env.*` reads in
+`convex.config.ts` run inside the Convex backend against that deployment's environment
+variables; `.env.local` and shell variables configure your tooling and never reach the backend.
+Without them the component is inert, not broken: enqueue stores events, nothing is scheduled, and
+no error is raised. Set the values with `npx convex env set NAME value` (development) or
+`npx convex env set --prod NAME value` (production), or in the dashboard, then re-push with
+`npx convex dev --once` or `npx convex deploy` so the mounts pick them up. Details in
+[Configure the Convex deployment](./docs/adoption.md#configure-the-convex-deployment).
+
 | Variable                | Use                                         | When absent                                  |
 | ----------------------- | ------------------------------------------- | -------------------------------------------- |
 | `TINYBIRD_TOKEN`        | Server-side datasource append credential    | Enqueue stores events, but delivery is inert |
@@ -88,7 +96,7 @@ mount and appear in its health result.
 ## Reading from the browser
 
 Each consuming app supplies its own workspace ID and signing secret through the mount's
-`env` mapping. See [per-app setup](./docs/installing-in-another-app.md#configure-browser-reads).
+`env` mapping. See [Configure browser reads](./docs/tinybird-setup.md#configure-browser-reads).
 Append and read configuration are independent: `health.configured` still checks the append
 token, while `health.readTokensConfigured` checks the signing secret and workspace ID. Neither
 proves that the remote credentials work.
@@ -511,30 +519,12 @@ your deployment credentials. Convex may download its local backend binary on the
 the delivery test suites themselves use stubbed HTTP transport. No Tinybird credentials are needed.
 The temporary local deployment is removed when the check finishes.
 
-### Intermittent test failure investigation
+### If a test fails
 
-Two historical single-test failures were reported without their names or full errors. Bounded
-local attempts did not reproduce them, and the cause remains unknown. See the
-[maintainer investigation record](docs/test-failure-investigation.md) for the historical sample
-and reproduction evidence.
-
-If a test fails, preserve its complete output before rerunning. From this package directory:
-
-```bash
-log_file="$(mktemp /tmp/convex-tinybird-vitest.XXXXXX)"
-echo "$log_file"
-pnpm exec vitest run --reporter=verbose >"$log_file" 2>&1
-```
-
-After the command finishes, read the complete output with `cat "$log_file"`. The Vitest command
-returns its original exit status; record it before running another command if needed.
-
-Record the commit, Node version, failing test and full error in the linked investigation. Do not retain only the
-summary or pipe the run through `head` or `tail`. A retry can help establish whether the failure
-repeats, but a passing retry does not establish its cause or justify ignoring a failed assertion.
-Link a new recurrence to FTD-2746 and investigate the named assertion or error. Preserve the first
-failure before checking an unchanged rerun, file-edit correlation or isolated test. If evidence
-points to shared tooling, report the reproduction there instead of weakening component assertions.
+Preserve the complete verbose output before rerunning (`pnpm exec vitest run --reporter=verbose`
+redirected to a file), and record the commit, Node version, failing test and full error. A
+passing retry can show whether a failure repeats; it does not establish its cause or justify
+ignoring a failed assertion.
 
 ## Package artifact
 
@@ -548,8 +538,8 @@ The package is licensed under Apache-2.0. See [LICENSE](LICENSE) and [CHANGELOG.
 
 ## Adoption and upgrades
 
-Follow [Adoption](docs/adoption.md) to install the published version from GitHub Packages in a separate app, mount the component, configure its environment and enqueue the first event. Provision Tinybird separately for each app and environment using [Install in another app](docs/installing-in-another-app.md).
+Consumers follow [Install and configure](docs/adoption.md) to install the published version from GitHub Packages, mount the component, configure the Convex deployment and enqueue the first event, and [Tinybird setup](docs/tinybird-setup.md) to provision workspaces, schema, tokens and browser reads for each environment.
 
-Run `bash scripts/clean-consumer.sh` with the repository's Node 24.19 toolchain. It installs the archive (or, with `CONVEX_TINYBIRD_CONSUMER_SPEC` and a `NODE_AUTH_TOKEN`, a published version) and Convex as the only direct runtime dependencies of a temporary app outside the workspace. Development tools are installed separately. It runs anonymous local Convex setup, explicit codegen, typechecking and a test with stubbed delivery. The fixture uses a `tickets` table and its own `workspaceKey` tenancy field. It rejects unauthorized reads, uses no workspace aliases, and deletes the temporary app when finished. It needs registry and Convex binary-download access; no cloud credentials or Tinybird workspace are needed. CI runs this as a required job for package and installation changes.
+Maintainers run `bash scripts/clean-consumer.sh` with the repository's Node 24.19 toolchain. It installs the archive (or, with `CONVEX_TINYBIRD_CONSUMER_SPEC` and a `NODE_AUTH_TOKEN`, a published version) and Convex as the only direct runtime dependencies of a temporary app outside the workspace. Development tools are installed separately. It runs anonymous local Convex setup, explicit codegen, typechecking and a test with stubbed delivery. The fixture uses a `tickets` table and its own `workspaceKey` tenancy field. It rejects unauthorized reads, uses no workspace aliases, and deletes the temporary app when finished. It needs registry and Convex binary-download access; no cloud credentials or Tinybird workspace are needed. CI runs this as a required job for package and installation changes.
 
 After publication, releases follow semantic versioning: patch releases fix compatible behavior, minor releases add compatible capabilities, and major releases may change the API or event contract. During `0.x`, treat minor upgrades as potentially breaking and review the changelog. Pin the version adopted by your app, upgrade first in staging, and rerun its delivery/read tests. Regenerate the consumer's `_generated` bindings with `convex dev` after mounting or upgrading; do not copy another app's generated bindings or manually edit the package internals. Source checkout users rebuild after changes; archive users receive the compiled artifacts.

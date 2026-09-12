@@ -236,7 +236,7 @@ export async function resolveExistingIdentity(
   // different door, and `resume` then hands it a second budget on top.
   //
   // A `delivering` row is never requeued whatever its `workId` says: it is mid-attempt by
-  // definition. Recovering one that is genuinely stuck is FTD-2500's job. The `pending`
+  // definition. Recovering one that is genuinely stuck is the recovery sweep's job. The `pending`
   // clause covers a row nothing ever scheduled, which is what a paused or unconfigured
   // instance leaves behind.
   if (
@@ -275,7 +275,7 @@ export async function deleteEventWithPayload(
   event: Doc<"events">,
 ): Promise<void> {
   if (event.payloadId !== undefined) {
-    // Tolerates a STALE pointer, and this is not defensive padding. FTD-2531 dead-letters an
+    // Tolerates a STALE pointer, and this is not defensive padding. Delivery dead-letters an
     // event whose payload row has gone, and nothing clears the pointer when that happens
     // because the row vanished by some means outside this component. Deleting a missing
     // document throws, and the throw would take down the whole sweep — every later call
