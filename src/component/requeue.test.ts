@@ -120,7 +120,7 @@ describe("requeueing work that stopped moving", () => {
     // The control that the age-based version failed. `maxParallelism` is 4, so a backlog of a
     // few hundred events puts the tail past ten minutes while every item is queued and
     // perfectly healthy. Requeueing one gives the event a second work item and a second retry
-    // budget, and sends it twice — the FTD-2531 defect, reached without any crash at all.
+    // budget, and sends it twice — the double-delivery defect, reached without any crash at all.
     const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
     vi.stubGlobal("fetch", fetchSpy);
     const t = setup();
@@ -308,7 +308,7 @@ describe("requeueing work that stopped moving", () => {
     // written. It is recorded now — and only when something was actually rescued, because
     // `lastOperatorAction` is a single slot shared with pause, resume and both replays, and
     // this runs on a cron. Writing it every pass would erase the last human action within a
-    // day, which is exactly the defect FTD-2502 fixed for `cleanup`.
+    // day, which is exactly the defect the retention cleanup once had.
     const fetchSpy = vi.fn().mockImplementation(() => jsonResponse(200, accepted));
     vi.stubGlobal("fetch", fetchSpy);
     const t = setup();

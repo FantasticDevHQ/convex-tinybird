@@ -498,7 +498,7 @@ describe("how the scan walks", () => {
     // cursor that points at a recent timestamp from returning rows the threshold excludes.
     //
     // What that costs if it goes is not a wasted read: it is a young row with a live delivery
-    // being handed a second work item — the FTD-2531 defect the whole `statusBatch` redesign
+    // being handed a second work item — the double-delivery defect the whole `statusBatch` redesign
     // exists to prevent, reached through the cursor rather than the clock. Verification found
     // the guard unpinned and said this was the single test it most wanted to exist, because
     // the history of this ticket is that an unpinned guard becomes the next defect.

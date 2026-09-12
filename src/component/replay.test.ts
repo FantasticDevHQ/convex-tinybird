@@ -93,7 +93,7 @@ describe("replayFailed", () => {
     const after = await t.run(async (ctx) => (await ctx.db.query("events").first())!);
     const payloadBefore = await payloadOf(t, before._id);
     expect(after.eventId).toBe(before.eventId);
-    // The payload moved to its own table in FTD-2525; it is still the SAME payload, which
+    // The payload lives in its own table since the payload split; it is still the SAME payload, which
     // is what "replay is not re-enqueue" means.
     expect(await payloadOf(t, after._id)).toBe(payloadBefore);
     expect(after.state).toBe("delivered");
