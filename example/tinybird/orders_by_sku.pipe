@@ -1,0 +1,14 @@
+# Orders and units per SKU, counting each order_id once. Read by the demo page through the
+# package's `./browser` entry with a JWT the host mints from `demoReadToken`.
+
+TOKEN "orders_read" READ
+
+NODE by_sku
+SQL >
+    SELECT sku, count() AS orders, sum(quantity) AS units
+    FROM orders FINAL
+    GROUP BY sku
+    ORDER BY orders DESC, sku ASC
+    LIMIT 50
+
+TYPE endpoint

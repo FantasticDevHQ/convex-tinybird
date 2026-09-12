@@ -1,13 +1,46 @@
 # Example app
 
 A minimal Convex app that mounts **two named instances** of the Tinybird component and exercises
-the public API end to end. It is the developer sandbox and the portability proof at once.
+the public API end to end, plus a small Vite page that shows the metrics it tracks. It is the
+developer sandbox and the portability proof at once.
+
+## Run the demo
+
+![The demo page: order tiles, per-mount delivery health showing the inert state, recent orders with per-event states](demo.png)
+
+```bash
+pnpm --dir example run dev
+```
+
+That starts a local anonymous Convex backend (no account), writes `VITE_CONVEX_URL` into
+`.env.local`, pushes the functions, and only then starts Vite on http://127.0.0.1:5173 (set
+`DEMO_PORT` to move it). Place a few orders. The page shows:
+
+- **Orders (host tables)**: order and unit totals and a per-SKU breakdown, read from this app's
+  own `orders` table. Nothing analytics-related.
+- **Delivery (component health, per mount)**: pending, delivering and failed counts, the oldest
+  pending age and the last delivery time for `productEvents` and `auditEvents`, from the
+  component's `health()` query. Without `TINYBIRD_*` variables on the deployment the badge says
+  **inert** and the card explains why: events are stored, nothing is sent, no error is raised.
+- **Recent orders**: the newest orders with each event's state on both mounts, from `status()`.
+- **Tinybird side**: once the product mount has a signing secret and workspace ID and the
+  `orders_by_sku` pipe from [`tinybird/`](tinybird/) is deployed, a button mints a read token
+  through `dashboard.demoReadToken` and reads the same numbers back through the package's
+  `./browser` entry. Until then it says the tokens are not configured.
+
+`pnpm --dir example run test:e2e` drives that page with Playwright against the real local
+backend (`pnpm --dir example exec playwright install chromium` once). CI runs it and keeps the
+screenshot as an artifact. The page's pure helpers (`src/metrics.ts`) are covered by the
+Vitest suite.
 
 ## What it is proving
 
 The component has to work in an application that knows nothing about it. So this app has an
-ordinary domain schema (`orders`), imports `convex` and `@fantasticdevhq/convex-tinybird` and
-nothing else, and mounts the component twice under different names.
+ordinary domain schema (`orders`), its backend imports `convex` and `@fantasticdevhq/convex-tinybird`
+and nothing else, and it mounts the component twice under different names. The demo page adds
+React and Vite to the example's dependencies; the boundary gate scans `convex/`, where the
+portability claim lives, and the page reaches the component only through the app's own queries
+and the package's `./browser` entry.
 
 Two mounts rather than one is deliberate. The component's own test suite registers a single
 instance, so it cannot see state leaking between mounts — a shared settings row, or one pause
@@ -77,6 +110,11 @@ many component calls in one host mutation: their read budgets share the parent t
 | `convex/convex.config.ts` | Mounts both instances with separate credentials                     |
 | `convex/schema.ts`        | An unrelated domain table — the component requires nothing of it    |
 | `convex/orders.ts`        | Enqueue inside the caller's transaction; status and health queries  |
+| `convex/dashboard.ts`     | What the demo page reads: order summary, recent orders, read token   |
+| `src/`                    | The Vite page and its pure metric helpers                           |
+| `e2e/demo.spec.ts`        | Playwright: orders placed on the page move the metrics              |
+| `scripts/dev.mjs`         | Starts the local backend, then Vite, in that order                  |
+| `tinybird/`               | Datafiles for the demo's `orders` datasource and `orders_by_sku` pipe |
 | `convex/maintenance.ts`   | The cron work a host owns: rescue stuck rows, then sweep            |
 | `convex/orders.test.ts`   | Delivery, transactional rollback, mount isolation, conflict, replay |
 
