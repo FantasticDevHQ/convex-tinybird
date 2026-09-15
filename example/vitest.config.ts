@@ -8,5 +8,7 @@ export default defineConfig({
     // test that silently reaches the network is exactly as wrong there as in the component.
     setupFiles: ["../vitest.setup.ts"],
     server: { deps: { inline: ["convex-test"] } },
+    // Playwright owns e2e/; Vitest must not try to run those specs.
+    exclude: ["e2e/**", "node_modules/**", "dist/**"],
   },
 });

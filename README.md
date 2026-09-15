@@ -61,7 +61,9 @@ export default app;
 
 Each mount has separate events, settings, health, credentials, and Workpool state. Keep mount
 names stable when updating the host. The example tests prove that both mounts accept the same
-`(datasource, eventId)` independently and that pausing one leaves the other running.
+`(datasource, eventId)` independently and that pausing one leaves the other running. To see it
+run, `pnpm --dir example run dev` serves a small page that places orders and shows the resulting
+host and delivery metrics; see [the example's README](./example/README.md#run-the-demo).
 
 ## Environment
 

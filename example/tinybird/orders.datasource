@@ -1,0 +1,13 @@
+# Destination for the example's `productEvents` mount. The component sends the enqueued payload
+# columns unchanged: { order_id, sku, quantity }. ReplacingMergeTree on order_id makes a repeated
+# delivery of the same event a no-op after merge; the pipe uses FINAL so reads see that too.
+
+SCHEMA >
+    `order_id` String `json:$.order_id`,
+    `sku` LowCardinality(String) `json:$.sku`,
+    `quantity` UInt32 `json:$.quantity`,
+    `received_at` DateTime64(3, 'UTC') `json:$.received_at` DEFAULT now64(3)
+
+ENGINE "ReplacingMergeTree"
+ENGINE_SORTING_KEY "order_id"
+ENGINE_PARTITION_KEY "toYYYYMM(received_at)"
