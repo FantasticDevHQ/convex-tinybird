@@ -45,6 +45,9 @@ app.use(tinybird, {
   env: {
     TINYBIRD_TOKEN: process.env.PRODUCT_TINYBIRD_TOKEN,
     TINYBIRD_HOST: process.env.PRODUCT_TINYBIRD_HOST,
+    // Only needed for browser reads: the signing secret and workspace the JWTs are bound to.
+    TINYBIRD_ADMIN_TOKEN: process.env.PRODUCT_TINYBIRD_ADMIN_TOKEN,
+    TINYBIRD_WORKSPACE_ID: process.env.PRODUCT_TINYBIRD_WORKSPACE_ID,
   },
 });
 
@@ -53,6 +56,8 @@ app.use(tinybird, {
   env: {
     TINYBIRD_TOKEN: process.env.AUDIT_TINYBIRD_TOKEN,
     TINYBIRD_HOST: process.env.AUDIT_TINYBIRD_HOST,
+    TINYBIRD_ADMIN_TOKEN: process.env.AUDIT_TINYBIRD_ADMIN_TOKEN,
+    TINYBIRD_WORKSPACE_ID: process.env.AUDIT_TINYBIRD_WORKSPACE_ID,
   },
 });
 
@@ -62,8 +67,9 @@ export default app;
 Each mount has separate events, settings, health, credentials, and Workpool state. Keep mount
 names stable when updating the host. The example tests prove that both mounts accept the same
 `(datasource, eventId)` independently and that pausing one leaves the other running. To see it
-run, `pnpm --dir example run dev` serves a small page that places orders and shows the resulting
-host and delivery metrics; see [the example's README](./example/README.md#run-the-demo).
+run, `pnpm --dir example run dev` boots Tinybird Local in Docker, wires it to both mounts and
+serves a page whose metrics and charts are read back from Tinybird; see
+[the example's README](./example/README.md#run-the-demo).
 
 ## Environment
 

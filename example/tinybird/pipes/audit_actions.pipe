@@ -1,0 +1,13 @@
+# What the second mount delivered: audit actions counted once per (order, action).
+
+TOKEN "orders_read" READ
+
+NODE actions
+SQL >
+    SELECT action, count() AS events
+    FROM audit FINAL
+    GROUP BY action
+    ORDER BY events DESC, action ASC
+    LIMIT 50
+
+TYPE endpoint

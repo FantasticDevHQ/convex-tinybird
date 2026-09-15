@@ -46,7 +46,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir example exec playwright install --with-deps chromium
-      # Starts the anonymous local Convex backend and Vite, then drives the page.
+      # The launcher deploys example/tinybird into Tinybird Local with the Tinybird CLI.
+      - run: pipx install tinybird
+      # scripts/dev.mjs starts Tinybird Local in Docker (available on this runner), deploys the
+      # example's datasources and pipes, configures the local Convex deployment, starts Vite,
+      # and the test drives the page until Tinybird's own numbers move.
       - run: pnpm --dir example run test:e2e
         env:
           CI: "1"

@@ -1,6 +1,6 @@
 /**
- * Pure presentation helpers for the demo page. Kept free of React and Convex so they can be
- * unit-tested with the rest of the example's Vitest suite.
+ * Pure presentation helpers for the demo page. Kept free of React, Convex and Tinybird so they
+ * can be unit-tested with the rest of the example's Vitest suite.
  */
 
 export type BoundedCount = { count: number; capped: boolean };
@@ -36,7 +36,7 @@ export function describeMode(mode: MountMode): string {
   }
 }
 
-/** "3s", "2m 05s", "1h 04m"; null when nothing is waiting. */
+/** "3s", "2m 05s", "1h 04m"; a dash when nothing is waiting. */
 export function formatAge(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return "–";
   const s = Math.max(0, Math.round(ms / 1000));
@@ -63,3 +63,92 @@ export function stateLabel(state: string | null): string {
 export function formatCount(count: BoundedCount): string {
   return count.capped ? `${count.count}+` : String(count.count);
 }
+
+// ------------------------------------------------------------------------ chart shaping
+
+/**
+ * The SKUs the form offers, in the fixed order their colours are assigned. Colour follows the
+ * entity, never its rank: `mug-blue` is slot 1 whether it is the top seller or absent.
+ */
+export const SKUS = ["mug-blue", "mug-red", "tee-black", "poster-a2"] as const;
+export type Sku = (typeof SKUS)[number];
+
+/** Validated 4-slot categorical palette (light / dark), one slot per SKU in SKUS order. */
+export const SERIES_LIGHT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"] as const;
+export const SERIES_DARK = ["#3987e5", "#d95926", "#199e70", "#c98500"] as const;
+
+export function skuColor(sku: string, dark: boolean): string {
+  const index = (SKUS as readonly string[]).indexOf(sku);
+  const palette = dark ? SERIES_DARK : SERIES_LIGHT;
+  // An unknown SKU (someone edited the data) still gets a stable, visible colour: the last slot.
+  return palette[index === -1 ? palette.length - 1 : index];
+}
+
+export type SkuRow = { sku: string; orders: number; units: number };
+
+/** Share of orders per SKU as a percentage, summing to ~100; empty input stays empty. */
+export function orderShare(rows: SkuRow[]): Array<SkuRow & { share: number }> {
+  const total = rows.reduce((sum, r) => sum + r.orders, 0);
+  if (total === 0) return [];
+  return rows.map((r) => ({ ...r, share: Math.round((r.orders / total) * 1000) / 10 }));
+}
+
+export type BucketRow = { bucket: string; orders: number; units?: number };
+
+/**
+ * Tinybird returns only the buckets that had rows. A trend chart needs every bucket of the
+ * window, zeros included, or a quiet stretch reads as a straight ramp between two busy ones.
+ * Bucket labels are ClickHouse DateTime strings ("2026-09-15 13:41:00"), treated as UTC.
+ */
+export function fillBuckets(
+  rows: Array<{ bucket: string; orders: number; units?: number }>,
+  now: number,
+  count: number,
+  stepMs: number,
+): BucketRow[] {
+  const byBucket = new Map<number, { orders: number; units?: number }>();
+  for (const row of rows) byBucket.set(parseClickHouseUtc(row.bucket), row);
+  const end = Math.floor(now / stepMs) * stepMs;
+  const out: BucketRow[] = [];
+  for (let i = count - 1; i >= 0; i -= 1) {
+    const at = end - i * stepMs;
+    const hit = byBucket.get(at);
+    out.push({ bucket: formatClickHouseUtc(at), orders: hit?.orders ?? 0, units: hit?.units ?? 0 });
+  }
+  return out;
+}
+
+export type MinuteRow = { minute: string; orders: number };
+export function fillMinutes(rows: MinuteRow[], now: number, windowMinutes = 15): MinuteRow[] {
+  return fillBuckets(
+    rows.map((r) => ({ bucket: r.minute, orders: r.orders })),
+    now,
+    windowMinutes,
+    60_000,
+  ).map((r) => ({ minute: r.bucket, orders: r.orders }));
+}
+
+export type HourRow = { hour: string; orders: number; units: number };
+export function fillHours(rows: HourRow[], now: number, windowHours = 24): BucketRow[] {
+  return fillBuckets(
+    rows.map((r) => ({ bucket: r.hour, orders: r.orders, units: r.units })),
+    now,
+    windowHours,
+    3_600_000,
+  );
+}
+
+export function parseClickHouseUtc(value: string): number {
+  return Date.parse(value.replace(" ", "T") + "Z");
+}
+function formatClickHouseUtc(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+}
+
+/** "13:41" local time for an axis tick, from a ClickHouse DateTime string. */
+export function minuteTick(value: string): string {
+  const d = new Date(parseClickHouseUtc(value));
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+/** "13:00" local time for an hourly tick. */
+export const hourTick = minuteTick;

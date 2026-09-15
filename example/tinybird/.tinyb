@@ -1,0 +1,11 @@
+{
+    "host": "http://127.0.0.1:7181",
+    "id": "b75f43ff-6e29-46ad-b845-ab076ae63681",
+    "name": "Tinybird_Local_Testing",
+    "scope": "admin",
+    "token": "p.eyJ1IjogImI3NWY0M2ZmLTZlMjktNDZhZC1iODQ1LWFiMDc2YWU2MzY4MSIsICJpZCI6ICJjMDg5MWRhZC1jYTY5LTRhNmMtYmFlYi1hMzA2MGY2ZGQ1MGQiLCAiaG9zdCI6IG51bGx9.OqvjO1HfnhzB9GR4DLvyGk1t7IUn3uuSdb23RlO5-8U",
+    "tokens": {
+        "http://127.0.0.1:7181": "p.eyJ1IjogImI3NWY0M2ZmLTZlMjktNDZhZC1iODQ1LWFiMDc2YWU2MzY4MSIsICJpZCI6ICJjMDg5MWRhZC1jYTY5LTRhNmMtYmFlYi1hMzA2MGY2ZGQ1MGQiLCAiaG9zdCI6IG51bGx9.OqvjO1HfnhzB9GR4DLvyGk1t7IUn3uuSdb23RlO5-8U"
+    },
+    "version": "4.6.4"
+}

@@ -5,52 +5,25 @@ import { components } from "./_generated/api";
 import { mutation, query } from "./_generated/server";
 
 /**
- * What the demo page reads. Everything here is HOST code: the component knows nothing about
- * orders, SKUs or which mount is "product". It only answers "what happened to event X" and
- * "how is this mount doing", and the page combines that with the host's own tables.
+ * What the demo page reads FROM CONVEX, which is deliberately not the metrics. Every aggregate
+ * on the page (orders, units, per-SKU, per-minute, audit actions) comes from Tinybird through
+ * the endpoints deployed from example/tinybird. Convex only answers the operational questions
+ * the component exists to answer: what happened to event X, and how is this mount doing.
  */
 const productEvents = new TinybirdDelivery(components.productEvents);
 const auditEvents = new TinybirdDelivery(components.auditEvents);
 
-/** How many recent orders the page reasons about. Bounded so the query cost is bounded. */
-const WINDOW = 200;
+/** The endpoints deployed from example/tinybird that the page is allowed to read. */
+export const DEMO_PIPES = [
+  "orders_summary",
+  "orders_by_sku",
+  "orders_per_minute",
+  "orders_per_hour",
+  "audit_actions",
+] as const;
+
+/** How many recent orders the page lists. Bounded so the query cost is bounded. */
 const RECENT = 8;
-
-export const vOrderSummary = v.object({
-  orders: v.number(),
-  units: v.number(),
-  bySku: v.array(v.object({ sku: v.string(), orders: v.number(), units: v.number() })),
-  /** True when more than WINDOW orders exist and the numbers describe only the newest WINDOW. */
-  truncated: v.boolean(),
-});
-
-/** Host-side metrics: nothing analytics-related, just the orders table summarised. */
-export const orderSummary = query({
-  args: {},
-  returns: vOrderSummary,
-  handler: async (ctx) => {
-    const rows = await ctx.db.query("orders").order("desc").take(WINDOW + 1);
-    const truncated = rows.length > WINDOW;
-    const window = rows.slice(0, WINDOW);
-    const bySku = new Map<string, { orders: number; units: number }>();
-    let units = 0;
-    for (const row of window) {
-      units += row.quantity;
-      const entry = bySku.get(row.sku) ?? { orders: 0, units: 0 };
-      entry.orders += 1;
-      entry.units += row.quantity;
-      bySku.set(row.sku, entry);
-    }
-    return {
-      orders: window.length,
-      units,
-      bySku: [...bySku.entries()]
-        .map(([sku, entry]) => ({ sku, ...entry }))
-        .sort((a, b) => b.orders - a.orders || a.sku.localeCompare(b.sku)),
-      truncated,
-    };
-  },
-});
 
 /**
  * The newest orders with the delivery state of each one's events on BOTH mounts. `status`
@@ -111,7 +84,32 @@ export const demoReadToken = mutation({
     return productEvents.mintReadToken(ctx, {
       name: "demo-page",
       ttlSeconds: 300,
-      scopes: [{ pipe: "orders_by_sku", fixedParams: {} }],
+      scopes: DEMO_PIPES.map((pipe) => ({ pipe, fixedParams: {} })),
     });
+  },
+});
+
+/**
+ * Schedule delivery for events that were enqueued before the deployment had a destination.
+ * Enqueue without a token stores the event and schedules nothing; `resume` unpauses (a no-op
+ * when not paused) and requeues what is waiting. The launcher calls this once the destination
+ * is configured. Unauthenticated for the same reason as operations.ts.
+ */
+export const resumeDelivery = mutation({
+  args: {},
+  returns: v.object({ product: v.number(), audit: v.number() }),
+  handler: async (ctx) => {
+    const out = { product: 0, audit: 0 };
+    for (const [key, stream] of [
+      ["product", productEvents],
+      ["audit", auditEvents],
+    ] as const) {
+      for (let pass = 0; pass < 10; pass += 1) {
+        const result = await stream.resume(ctx, { actor: "demo launcher" });
+        out[key] += result.requeued;
+        if (result.requeued === 0) break;
+      }
+    }
+    return out;
   },
 });

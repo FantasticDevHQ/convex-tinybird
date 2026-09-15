@@ -1,0 +1,13 @@
+# Orders per minute over the last quarter hour, for the page's small trend.
+
+TOKEN "orders_read" READ
+
+NODE per_minute
+SQL >
+    SELECT toStartOfMinute(received_at) AS minute, count() AS orders
+    FROM orders FINAL
+    WHERE received_at >= now() - INTERVAL 15 MINUTE
+    GROUP BY minute
+    ORDER BY minute ASC
+
+TYPE endpoint

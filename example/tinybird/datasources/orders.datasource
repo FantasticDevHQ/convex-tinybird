@@ -1,6 +1,6 @@
 # Destination for the example's `productEvents` mount. The component sends the enqueued payload
 # columns unchanged: { order_id, sku, quantity }. ReplacingMergeTree on order_id makes a repeated
-# delivery of the same event a no-op after merge; the pipe uses FINAL so reads see that too.
+# delivery of the same event a no-op after merge; every pipe reads FINAL so reads see that too.
 
 SCHEMA >
     `order_id` String `json:$.order_id`,
