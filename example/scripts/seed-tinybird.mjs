@@ -49,6 +49,26 @@ for (let i = 0; i < ORDERS; i += 1) {
   if (i % 9 === 0) audit.push({ order_id: id, action: "order.reviewed", received_at: stamp(at + 120_000) });
 }
 
+// A year of history for the activity heatmap: sparse, with weekday/weekend and seasonal shape,
+// deterministic like the rest. Days 1..364 back; the last 24 hours are covered above.
+for (let d = 1; d < 365; d += 1) {
+  const dayStart = now - d * 86_400_000;
+  const weekday = new Date(dayStart).getUTCDay();
+  const weekend = weekday === 0 || weekday === 6;
+  // Pseudo-random but stable per day; ~15% of weekdays and ~40% of weekends are quiet.
+  const noise = ((d * 2654435761) >>> 0) % 100;
+  if (noise < (weekend ? 40 : 15)) continue;
+  const season = 1 + Math.sin((d / 365) * Math.PI * 2) * 0.5; // gentle yearly wave
+  const perDay = Math.max(1, Math.round((weekend ? 2 : 5) * season * (0.6 + (noise % 9) / 10)));
+  for (let k = 0; k < perDay; k += 1) {
+    const at = dayStart + 8 * 3600_000 + ((d * 7919 + k * 104729) % (12 * 3600_000));
+    const id = `seed-orders-day${String(d).padStart(3, "0")}-${k}`;
+    const n = d * 31 + k;
+    orders.push({ order_id: id, sku: pick(n), quantity: 1 + (n % 3), received_at: stamp(at) });
+    audit.push({ order_id: id, action: "order.placed", received_at: stamp(at) });
+  }
+}
+
 async function send(name, rows) {
   const body = rows.map((r) => JSON.stringify(r)).join("\n");
   const res = await fetch(`${host}/v0/events?name=${name}&wait=true`, {

@@ -20,11 +20,13 @@ export type SkuRow = { sku: string; orders: number; units: number };
 export type MinuteRow = { minute: string; orders: number };
 export type HourRow = { hour: string; orders: number; units: number };
 export type AuditRow = { action: string; events: number };
+export type DayRow = { day: string; orders: number; units: number };
 export type Snapshot = {
   summary: Summary;
   bySku: SkuRow[];
   perMinute: MinuteRow[];
   perHour: HourRow[];
+  perDay: DayRow[];
   audit: AuditRow[];
   readAt: number;
 };
@@ -33,11 +35,12 @@ export type Snapshot = {
 export async function readSnapshot(token: ReadToken, signal: AbortSignal): Promise<Snapshot> {
   const read = <T,>(pipe: string) =>
     queryPipe<T>({ host: token.host, token: token.token, pipe, params: {}, signal });
-  const [summary, bySku, perMinute, perHour, audit] = await Promise.all([
+  const [summary, bySku, perMinute, perHour, perDay, audit] = await Promise.all([
     read<Summary>("orders_summary"),
     read<SkuRow>("orders_by_sku"),
     read<MinuteRow>("orders_per_minute"),
     read<HourRow>("orders_per_hour"),
+    read<DayRow>("orders_per_day"),
     read<AuditRow>("audit_actions"),
   ]);
   return {
@@ -45,6 +48,7 @@ export async function readSnapshot(token: ReadToken, signal: AbortSignal): Promi
     bySku: bySku.data,
     perMinute: perMinute.data,
     perHour: perHour.data,
+    perDay: perDay.data,
     audit: audit.data,
     readAt: Date.now(),
   };

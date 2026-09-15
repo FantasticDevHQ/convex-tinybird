@@ -19,6 +19,7 @@ export const DEMO_PIPES = [
   "orders_by_sku",
   "orders_per_minute",
   "orders_per_hour",
+  "orders_per_day",
   "audit_actions",
 ] as const;
 

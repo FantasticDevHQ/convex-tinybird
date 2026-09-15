@@ -152,3 +152,28 @@ export function minuteTick(value: string): string {
 }
 /** "13:00" local time for an hourly tick. */
 export const hourTick = minuteTick;
+
+// ------------------------------------------------------------------------ activity heatmap
+
+export type DayRow = { day: string; orders: number; units: number };
+export type ContributionDay = { date: string; count: number; level: 0 | 1 | 2 | 3 | 4 };
+
+/**
+ * GitHub-style levels: 0 for no orders, then quartiles of the non-zero days so the scale adapts
+ * to the data instead of a fixed threshold. A single busy day should not make every other day
+ * look empty, and a quiet year should still show gradation.
+ */
+export function contributionLevels(rows: DayRow[]): ContributionDay[] {
+  const counts = rows.map((r) => r.orders).filter((n) => n > 0).sort((a, b) => a - b);
+  const quantile = (q: number) => counts[Math.min(counts.length - 1, Math.floor(q * counts.length))] ?? 0;
+  const cut = [quantile(0.25), quantile(0.5), quantile(0.75)];
+  return rows.map((r) => {
+    let level: ContributionDay["level"] = 0;
+    if (r.orders > 0) level = r.orders <= cut[0] ? 1 : r.orders <= cut[1] ? 2 : r.orders <= cut[2] ? 3 : 4;
+    return { date: r.day, count: r.orders, level };
+  });
+}
+
+/** Sequential single-hue ramp for the heatmap (blue 100 → 550, light; 250 → 600 on dark). */
+export const HEATMAP_LIGHT = { empty: "#f0efec", level1: "#cde2fb", level2: "#86b6ef", level3: "#3987e5", level4: "#1c5cab" };
+export const HEATMAP_DARK = { empty: "#383835", level1: "#184f95", level2: "#256abf", level3: "#3987e5", level4: "#86b6ef" };

@@ -30,11 +30,13 @@ leaves that alone; deploy `tinybird/` there yourself with `tb deploy`.
 
 Place a few orders (or "Place 10"). Every number and chart under **Metrics** is read from
 Tinybird endpoints through the package's `./browser` entry with a JWT the host mints via
-`dashboard.demoReadToken`, refreshed every two seconds: order/unit/SKU totals, orders and
-units per hour (24h line), orders per minute (bars), share of orders by SKU (donut, with its
-table), units by SKU (bars) and audit actions from the second mount (bars). The page is Vite +
+`dashboard.demoReadToken`, refreshed every two seconds: order/unit/SKU totals, a GitHub-style
+activity heatmap of orders per day over the last year (the seeded history), orders and units
+per hour (24h line), orders per minute (bars), share of orders by SKU (donut, with its table),
+units by SKU (bars) and audit actions from the second mount (bars). The page is Vite +
 React with Tailwind v4 and shadcn/ui (Base UI) components; the charts are shadcn's chart
-wrappers over Recharts 3. Convex contributes only the **Pipeline** strip (is each
+wrappers over Recharts 3, and the heatmap is [gitmap](https://github.com/rudrodip/gitmap)
+installed from its shadcn registry. Convex contributes only the **Pipeline** strip (is each
 mount configured, what is pending, delivering, failed) and the **Recent orders** list with each
 event's delivery state, which is how you watch an order travel from enqueue to Tinybird.
 

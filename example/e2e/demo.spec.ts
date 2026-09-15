@@ -50,6 +50,13 @@ test("orders placed on the page arrive in Tinybird and move its metrics and char
   for (const chart of ["chart-per-hour", "chart-per-minute", "chart-share", "chart-units", "chart-audit"]) {
     await expect(page.getByTestId(chart).locator("svg").first()).toBeVisible();
   }
+  // The activity heatmap is a year of day cells from orders_per_day; the seeded history means
+  // plenty of them are non-empty.
+  const cells = page.getByTestId("chart-activity").locator("[data-date]");
+  await expect(cells.first()).toBeAttached();
+  expect(await cells.count()).toBeGreaterThan(300);
+  // At least one cell carries a seeded count, so the heatmap is not a grid of zeros.
+  expect(await cells.locator(':scope:not([data-count="0"])').count()).toBeGreaterThan(100);
   await expect(page.getByTestId("sku-row-mug-blue")).toBeVisible();
   await expect(page.getByTestId("sku-row-tee-black")).toBeVisible();
   await expect(page.getByTestId("chart-audit").locator("text", { hasText: "order.placed" })).toBeVisible();

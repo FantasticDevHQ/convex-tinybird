@@ -60,9 +60,6 @@ async function waitFor(what, probe, timeoutMs) {
 
 // ---------------------------------------------------------------- 1. Convex deployment
 
-log("provisioning the local Convex deployment");
-convex(["dev", "--once", "--typecheck", "disable"]);
-
 function convexUrl() {
   if (!existsSync(envFile)) return undefined;
   return readFileSync(envFile, "utf8")
@@ -70,6 +67,17 @@ function convexUrl() {
     .find((l) => l.startsWith("VITE_CONVEX_URL="))
     ?.slice("VITE_CONVEX_URL=".length)
     .trim();
+}
+
+// A second `pnpm dev` (or the Playwright run next to a live demo) must not fight the first one
+// for the local backend: `convex dev --once` refuses while a backend is running. Reuse it.
+const existingBackend = convexUrl();
+const backendAlreadyUp = Boolean(existingBackend && (await ok(`${existingBackend}/version`)));
+if (backendAlreadyUp) {
+  log(`reusing the Convex backend already running at ${existingBackend}`);
+} else {
+  log("provisioning the local Convex deployment");
+  convex(["dev", "--once", "--typecheck", "disable"]);
 }
 
 function envGet(name) {
@@ -134,12 +142,18 @@ if (currentHost && !isLoopback(currentHost)) {
   log("seeding sample rows into Tinybird Local so the charts have a shape before the first click");
   sh(process.execPath, [join(example, "scripts/seed-tinybird.mjs"), localHost, token]);
 
-  log("putting the destination on both mounts of the Convex deployment (convex env set)");
-  for (const mount of ["PRODUCT", "AUDIT"]) {
-    convex(["env", "set", `${mount}_TINYBIRD_HOST`, localHost]);
-    convex(["env", "set", `${mount}_TINYBIRD_TOKEN`, token]);
-    convex(["env", "set", `${mount}_TINYBIRD_ADMIN_TOKEN`, signingKey]);
-    convex(["env", "set", `${mount}_TINYBIRD_WORKSPACE_ID`, workspace.id]);
+  const wanted = { HOST: localHost, TOKEN: token, ADMIN_TOKEN: signingKey, WORKSPACE_ID: workspace.id };
+  const changed = ["PRODUCT", "AUDIT"].some((mount) =>
+    Object.entries(wanted).some(([key, value]) => envGet(`${mount}_TINYBIRD_${key}`) !== value),
+  );
+  if (changed) {
+    log("putting the destination on both mounts of the Convex deployment (convex env set)");
+    for (const mount of ["PRODUCT", "AUDIT"])
+      for (const [key, value] of Object.entries(wanted)) convex(["env", "set", `${mount}_TINYBIRD_${key}`, value]);
+    if (backendAlreadyUp)
+      log("NOTE: the running `convex dev` keeps its old environment until it pushes again; restart it to pick these up");
+  } else {
+    log("deployment already carries this destination on both mounts");
   }
   log(`Tinybird Local ready: workspace ${workspace.name} (${workspace.id})`);
 }
@@ -165,7 +179,7 @@ function shutdown(code = 0) {
 process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
-run("npx", ["--no-install", "convex", "dev"]);
+if (!backendAlreadyUp) run("npx", ["--no-install", "convex", "dev"]);
 const url = await waitFor(
   "Convex backend",
   async () => {

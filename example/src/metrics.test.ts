@@ -1,4 +1,5 @@
 import {
+  contributionLevels,
   describeMode,
   fillHours,
   fillMinutes,
@@ -116,5 +117,20 @@ describe("fillHours", () => {
     expect(filled).toHaveLength(24);
     expect(filled.at(-1)).toEqual({ bucket: "2026-09-15 13:00:00", orders: 0, units: 0 });
     expect(filled.at(-2)).toEqual({ bucket: "2026-09-15 12:00:00", orders: 3, units: 7 });
+  });
+});
+
+describe("contributionLevels", () => {
+  it("gives zero-order days level 0 and spreads the rest over quartiles", () => {
+    const rows = [1, 2, 3, 4, 5, 6, 7, 8].map((n, i) => ({ day: `2026-01-0${i + 1}`, orders: n, units: n }));
+    rows.push({ day: "2026-01-09", orders: 0, units: 0 });
+    const levels = contributionLevels(rows).map((r) => r.level);
+    expect(levels.at(-1)).toBe(0);
+    expect(new Set(levels.slice(0, 8))).toEqual(new Set([1, 2, 3, 4]));
+    expect(levels[0]).toBe(1);
+    expect(levels[7]).toBe(4);
+  });
+  it("does not crash on an empty year", () => {
+    expect(contributionLevels([])).toEqual([]);
   });
 });

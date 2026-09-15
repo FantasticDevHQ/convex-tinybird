@@ -15,11 +15,15 @@ import {
 } from "@/components/ui/chart";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Gitmap } from "@/components/ui/gitmap";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "../convex/_generated/api";
 import {
+  contributionLevels,
   describeMode,
   fillHours,
+  HEATMAP_DARK,
+  HEATMAP_LIGHT,
   fillMinutes,
   formatAge,
   formatCount,
@@ -76,6 +80,7 @@ export function App() {
   const product = health?.product as MountHealth | undefined;
   const readTokensConfigured = Boolean(product?.readTokensConfigured);
   const tinybird = useTinybird(readTokensConfigured);
+  const dark = usePrefersDark();
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8 pb-16 space-y-8">
@@ -171,7 +176,7 @@ export function App() {
             </CardContent>
           </Card>
         ) : (
-          <TinybirdPanel state={tinybird} now={now} />
+          <TinybirdPanel state={tinybird} now={now} dark={dark} />
         )}
       </section>
 
@@ -222,7 +227,8 @@ export function App() {
 
       <footer className="text-xs text-muted-foreground">
         Endpoints: <code>orders_summary</code>, <code>orders_by_sku</code>,{" "}
-        <code>orders_per_hour</code>, <code>orders_per_minute</code>, <code>audit_actions</code>{" "}
+        <code>orders_per_hour</code>, <code>orders_per_minute</code>, <code>orders_per_day</code>,{" "}
+        <code>audit_actions</code>{" "}
         (deployed from <code>example/tinybird</code>). Pipeline state from <code>health()</code>,
         per-event state from <code>status()</code>.
       </footer>
@@ -308,7 +314,7 @@ function Stat({ label, value, testId, hint }: { label: string; value: string | n
   );
 }
 
-function TinybirdPanel({ state, now }: { state: TinybirdState; now: number }) {
+function TinybirdPanel({ state, now, dark }: { state: TinybirdState; now: number; dark: boolean }) {
   if (state.kind === "loading")
     return (
       <Card data-testid="tinybird-read">
@@ -340,6 +346,25 @@ function TinybirdPanel({ state, now }: { state: TinybirdState; now: number }) {
         <Stat label="Distinct SKUs" value={snapshot.summary.skus} testId="tb-skus" />
         <Stat label="Last read" value={formatSince(snapshot.readAt, now)} hint={`every ${POLL_MS / 1000}s`} />
       </div>
+
+      <Card data-testid="chart-activity">
+        <CardHeader>
+          <CardTitle>Order activity</CardTitle>
+          <CardDescription>Orders per day over the last year, darker is busier</CardDescription>
+        </CardHeader>
+        <CardContent className="overflow-x-auto pt-2">
+          <Gitmap
+            contributions={contributionLevels(snapshot.perDay)}
+            from={new Date(now - 364 * 86_400_000)}
+            to={new Date(now)}
+            colors={dark ? HEATMAP_DARK : HEATMAP_LIGHT}
+            showMonths
+            showDays
+            cellSize={11}
+            cellGap={3}
+          />
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card data-testid="chart-per-hour">
@@ -513,4 +538,18 @@ function Metric({ label, value, testId, hint, small }: { label: string; value: s
       {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
     </div>
   );
+}
+
+function usePrefersDark(): boolean {
+  const [dark, setDark] = useState(
+    () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
+  );
+  useEffect(() => {
+    const query = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!query) return;
+    const onChange = (e: MediaQueryListEvent) => setDark(e.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+  return dark;
 }
