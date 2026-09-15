@@ -20,6 +20,9 @@ app.use(tinybird, {
   env: {
     TINYBIRD_TOKEN: process.env.PRODUCT_TINYBIRD_TOKEN,
     TINYBIRD_HOST: process.env.PRODUCT_TINYBIRD_HOST,
+    // Only needed for browser reads: the signing secret and workspace the JWTs are bound to.
+    TINYBIRD_ADMIN_TOKEN: process.env.PRODUCT_TINYBIRD_ADMIN_TOKEN,
+    TINYBIRD_WORKSPACE_ID: process.env.PRODUCT_TINYBIRD_WORKSPACE_ID,
   },
 });
 
@@ -28,6 +31,8 @@ app.use(tinybird, {
   env: {
     TINYBIRD_TOKEN: process.env.AUDIT_TINYBIRD_TOKEN,
     TINYBIRD_HOST: process.env.AUDIT_TINYBIRD_HOST,
+    TINYBIRD_ADMIN_TOKEN: process.env.AUDIT_TINYBIRD_ADMIN_TOKEN,
+    TINYBIRD_WORKSPACE_ID: process.env.AUDIT_TINYBIRD_WORKSPACE_ID,
   },
 });
 

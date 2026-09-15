@@ -1,0 +1,14 @@
+# Orders and units per hour over the last 24 hours, for the page's main trend. The sample data
+# the launcher seeds spans this window, so the chart has a shape before anyone clicks.
+
+TOKEN "orders_read" READ
+
+NODE per_hour
+SQL >
+    SELECT toStartOfHour(received_at) AS hour, count() AS orders, sum(quantity) AS units
+    FROM orders FINAL
+    WHERE received_at >= now() - INTERVAL 24 HOUR
+    GROUP BY hour
+    ORDER BY hour ASC
+
+TYPE endpoint

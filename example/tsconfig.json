@@ -29,7 +29,13 @@
       "vite/client",
       "@playwright/test"
     ],
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    }
   },
   "include": [
     "convex",

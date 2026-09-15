@@ -1,0 +1,13 @@
+# Orders per calendar day over the last year, for the activity heatmap. Each order counted once.
+
+TOKEN "orders_read" READ
+
+NODE per_day
+SQL >
+    SELECT toDate(received_at) AS day, count() AS orders, sum(quantity) AS units
+    FROM orders FINAL
+    WHERE received_at >= now() - INTERVAL 365 DAY
+    GROUP BY day
+    ORDER BY day ASC
+
+TYPE endpoint

@@ -1,0 +1,10 @@
+# Destination for the example's `auditEvents` mount: { order_id, action }.
+
+SCHEMA >
+    `order_id` String `json:$.order_id`,
+    `action` LowCardinality(String) `json:$.action`,
+    `received_at` DateTime64(3, 'UTC') `json:$.received_at` DEFAULT now64(3)
+
+ENGINE "ReplacingMergeTree"
+ENGINE_SORTING_KEY "order_id, action"
+ENGINE_PARTITION_KEY "toYYYYMM(received_at)"

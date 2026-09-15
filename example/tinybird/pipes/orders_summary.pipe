@@ -1,0 +1,10 @@
+# Headline numbers for the demo page, each order counted once.
+
+TOKEN "orders_read" READ
+
+NODE summary
+SQL >
+    SELECT count() AS orders, sum(quantity) AS units, uniqExact(sku) AS skus
+    FROM orders FINAL
+
+TYPE endpoint

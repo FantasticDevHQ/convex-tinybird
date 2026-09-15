@@ -6,32 +6,44 @@ developer sandbox and the portability proof at once.
 
 ## Run the demo
 
-![The demo page: order tiles, per-mount delivery health showing the inert state, recent orders with per-event states](demo.png)
+![The demo page: Tinybird-backed tiles and charts, the Convex pipeline strip, recent orders with per-event states](demo.png)
 
 ```bash
 pnpm --dir example run dev
 ```
 
-That starts a local anonymous Convex backend (no account), writes `VITE_CONVEX_URL` into
-`.env.local`, pushes the functions, and only then starts Vite on http://127.0.0.1:5173 (set
-`DEMO_PORT` to move it). Place a few orders. The page shows:
+Prerequisites: Docker running and the Tinybird CLI on PATH (`pipx install tinybird`). Nothing
+to configure. The launcher (`scripts/dev.mjs`):
 
-- **Orders (host tables)**: order and unit totals and a per-SKU breakdown, read from this app's
-  own `orders` table. Nothing analytics-related.
-- **Delivery (component health, per mount)**: pending, delivering and failed counts, the oldest
-  pending age and the last delivery time for `productEvents` and `auditEvents`, from the
-  component's `health()` query. Without `TINYBIRD_*` variables on the deployment the badge says
-  **inert** and the card explains why: events are stored, nothing is sent, no error is raised.
-- **Recent orders**: the newest orders with each event's state on both mounts, from `status()`.
-- **Tinybird side**: once the product mount has a signing secret and workspace ID and the
-  `orders_by_sku` pipe from [`tinybird/`](tinybird/) is deployed, a button mints a read token
-  through `dashboard.demoReadToken` and reads the same numbers back through the package's
-  `./browser` entry. Until then it says the tokens are not configured.
+1. provisions a local anonymous Convex deployment (no account) and writes `VITE_CONVEX_URL`;
+2. starts **Tinybird Local** in Docker, deploys [`tinybird/`](tinybird/) (the `orders` and
+   `audit` datasources and five endpoints) into it, seeds a day of deterministic sample orders
+   straight into Tinybird so the charts have a shape before the first click, and puts its host,
+   append token, signing key and workspace id on both mounts of the Convex deployment with
+   `convex env set`;
+3. starts `convex dev`, which pushes the functions with that environment, resumes delivery of
+   anything enqueued before the destination existed, then serves Vite on
+   http://127.0.0.1:5173 (`DEMO_PORT` moves it; `TINYBIRD_LOCAL_PORT` moves Tinybird).
+
+If the deployment already points `PRODUCT_TINYBIRD_HOST` at a cloud workspace, the launcher
+leaves that alone; deploy `tinybird/` there yourself with `tb deploy`.
+
+Place a few orders (or "Place 10"). Every number and chart under **Metrics** is read from
+Tinybird endpoints through the package's `./browser` entry with a JWT the host mints via
+`dashboard.demoReadToken`, refreshed every two seconds: order/unit/SKU totals, a GitHub-style
+activity heatmap of orders per day over the last year (the seeded history), orders and units
+per hour (24h line), orders per minute (bars), share of orders by SKU (donut, with its table),
+units by SKU (bars) and audit actions from the second mount (bars). The page is Vite +
+React with Tailwind v4 and shadcn/ui (Base UI) components; the charts are shadcn's chart
+wrappers over Recharts 3, and the heatmap is [gitmap](https://github.com/rudrodip/gitmap)
+installed from its shadcn registry. Convex contributes only the **Pipeline** strip (is each
+mount configured, what is pending, delivering, failed) and the **Recent orders** list with each
+event's delivery state, which is how you watch an order travel from enqueue to Tinybird.
 
 `pnpm --dir example run test:e2e` drives that page with Playwright against the real local
-backend (`pnpm --dir example exec playwright install chromium` once). CI runs it and keeps the
-screenshot as an artifact. The page's pure helpers (`src/metrics.ts`) are covered by the
-Vitest suite.
+backend and the real Tinybird Local, asserting that Tinybird's numbers move after orders are
+placed (`pnpm --dir example exec playwright install chromium` once). CI runs it and keeps the
+screenshot as an artifact. The page's pure helpers (`src/metrics.ts`) have Vitest coverage.
 
 ## What it is proving
 
@@ -110,11 +122,11 @@ many component calls in one host mutation: their read budgets share the parent t
 | `convex/convex.config.ts` | Mounts both instances with separate credentials                     |
 | `convex/schema.ts`        | An unrelated domain table — the component requires nothing of it    |
 | `convex/orders.ts`        | Enqueue inside the caller's transaction; status and health queries  |
-| `convex/dashboard.ts`     | What the demo page reads: order summary, recent orders, read token   |
-| `src/`                    | The Vite page and its pure metric helpers                           |
-| `e2e/demo.spec.ts`        | Playwright: orders placed on the page move the metrics              |
-| `scripts/dev.mjs`         | Starts the local backend, then Vite, in that order                  |
-| `tinybird/`               | Datafiles for the demo's `orders` datasource and `orders_by_sku` pipe |
+| `convex/dashboard.ts`     | Recent orders with per-event state; mints the page's read token     |
+| `src/`                    | The Vite page (Tinybird-backed charts) and its pure helpers         |
+| `e2e/demo.spec.ts`        | Playwright: orders placed on the page arrive in Tinybird's metrics  |
+| `scripts/dev.mjs`         | Boots Convex, Tinybird Local, deploys datafiles, configures, runs   |
+| `tinybird/`               | The demo's datasources and endpoints, deployed with `tb deploy`     |
 | `convex/maintenance.ts`   | The cron work a host owns: rescue stuck rows, then sweep            |
 | `convex/orders.test.ts`   | Delivery, transactional rollback, mount isolation, conflict, replay |
 
