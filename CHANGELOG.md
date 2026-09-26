@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.2...v0.2.3) (2026-09-26)
+
+
+### Maintenance
+
+* **deps:** update dependencies to latest (FTD-2880) ([cb572ab](https://github.com/FantasticDevHQ/convex-tinybird/commit/cb572aba3ef992647364580aaafba29c1a36d8c6))
+
 ## [0.2.2](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.1...v0.2.2) (2026-09-26)
 
 
