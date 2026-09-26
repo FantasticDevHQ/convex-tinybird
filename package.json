@@ -56,7 +56,7 @@
     "codegen": "convex codegen --component-dir src/component",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "check": "pnpm run check:pack && node --test scripts/check-pack.test.mjs && pnpm run typecheck && pnpm run test && pnpm run check:boundary && pnpm run check:secrets && node scripts/check-codegen-fresh.mjs && node scripts/check-readme-samples.mjs && node --test scripts/check-boundary.test.mjs scripts/check-no-secrets.test.mjs scripts/check-codegen-fresh.test.mjs scripts/check-readme-samples.test.mjs && pnpm --dir example run typecheck && pnpm --dir example run test",
+    "check": "pnpm run check:pack && node --test scripts/check-pack.test.mjs && pnpm run typecheck && pnpm run test && pnpm run check:boundary && pnpm run check:secrets && node scripts/check-codegen-fresh.mjs && node scripts/check-readme-samples.mjs && node --test scripts/check-boundary.test.mjs scripts/check-no-secrets.test.mjs scripts/check-codegen-fresh.test.mjs scripts/check-readme-samples.test.mjs scripts/release-notes.test.mjs && pnpm --dir example run typecheck && pnpm --dir example run test",
     "build": "tsc --project tsconfig.build.json",
     "check:pack": "pnpm run build && node scripts/check-pack.mjs",
     "prepack": "pnpm run build",
