@@ -1,4 +1,4 @@
-# @fantasticdevhq/convex-tinybird
+# @fantastic.dev/convex-tinybird
 
 A reusable Convex component for delivering analytics events to Tinybird. Enqueue runs in the
 host mutation's transaction, so domain writes and the event commit or roll back together.
@@ -11,11 +11,11 @@ exactly-once ingestion or make raw additive aggregates safe.
 ## Install and mount
 
 Start with [Install and configure](./docs/adoption.md): install the published package from
-GitHub Packages, mount it, put its credentials on the Convex deployment, and send a first event.
+npm, mount it, put its credentials on the Convex deployment, and send a first event.
 Then follow [Tinybird setup](./docs/tinybird-setup.md) for workspaces, schema, tokens, browser
 reads and the pre-production checklist. Mounting this component does not provision Tinybird.
 
-Install `@fantasticdevhq/convex-tinybird` alongside `convex`. The component's only runtime
+Install `@fantastic.dev/convex-tinybird` alongside `convex`. The component's only runtime
 dependencies are Convex and Workpool; it imports no host schema or authentication.
 
 The [example configuration](./example/convex/convex.config.ts) mounts two independent streams:
@@ -23,7 +23,7 @@ The [example configuration](./example/convex/convex.config.ts) mounts two indepe
 <!-- example: example/convex/convex.config.ts -->
 
 ```ts
-import tinybird from "@fantasticdevhq/convex-tinybird/convex.config";
+import tinybird from "@fantastic.dev/convex-tinybird/convex.config";
 import { defineApp } from "convex/server";
 
 /**
@@ -134,7 +134,7 @@ Update each affected deployment and re-push its mount configuration after rotati
 clients must never receive append, deployment, or admin credentials. See the
 [Tinybird JWT contract](https://www.tinybird.co/docs/forward/core-concepts/jwt).
 
-Import `queryPipe` from `@fantasticdevhq/convex-tinybird/browser` in browser code. This separate
+Import `queryPipe` from `@fantastic.dev/convex-tinybird/browser` in browser code. This separate
 entry imports neither the component client nor the Tinybird SDK. Pass the token issuer's
 `host` and `token`, the allowed `pipe` name, typed query `params`, and an optional abort
 `signal`. It returns `{ data, meta, rows }`. Values in `params` are strings, numbers, or
@@ -291,7 +291,7 @@ export const operatorReplayFailed = mutation({
 });
 ```
 
-The wrapper imports `vFailureCategory` from `@fantasticdevhq/convex-tinybird`. Pass an optional
+The wrapper imports `vFailureCategory` from `@fantastic.dev/convex-tinybird`. Pass an optional
 `category`, such as `quarantined`, to replay only that failure category. The index selects matching
 rows before applying the batch limit. `remaining` describes that category; omit the argument to
 replay all dead letters. Both paths order by last update so repeated failures go to the back.
@@ -376,7 +376,7 @@ Its handler processes one recovery page and one cleanup page per stream per invo
 <!-- example: example/convex/maintenance.ts -->
 
 ```ts
-import { TinybirdDelivery } from "@fantasticdevhq/convex-tinybird";
+import { TinybirdDelivery } from "@fantastic.dev/convex-tinybird";
 import { v } from "convex/values";
 
 import { components } from "./_generated/api";
@@ -473,7 +473,7 @@ then reset for another pass. It records no operator actor, so the host must prov
 
 ## Testing against it
 
-Import `register` from `@fantasticdevhq/convex-tinybird/test` and register each named mount once.
+Import `register` from `@fantastic.dev/convex-tinybird/test` and register each named mount once.
 The helper registers its nested Workpool too. The example uses transaction limits in its test harness:
 
 <!-- example: example/convex/orders.test.ts -->
@@ -540,14 +540,14 @@ Installation builds the package through `prepare`, so tests and development comm
 
 Run `pnpm run check:pack` to check npm's dry-run file list, reject unexpected files and host references, and resolve runtime exports from an extracted tarball. This maintainer gate requires Node, pnpm, npm, `tar` and a symlink-capable filesystem; run it on macOS or Linux, matching CI. It is part of `pnpm run check`. `npm pack` builds through `prepack`. Test suites, fixtures, example apps and environment files are excluded.
 
-Releases are published to GitHub Packages by the `Release` workflow when a `vX.Y.Z` tag is pushed; the workflow refuses a tag that does not match `package.json` and `CHANGELOG.md`, runs the full check, publishes with the workflow's own token, and creates the GitHub release. There is no long-lived registry token.
+Releases are published to npmjs.com by the `Release` workflow when a `vX.Y.Z` tag is pushed; the workflow refuses a tag that does not match `package.json` and `CHANGELOG.md`, runs the full check, publishes through npm trusted publishing (OIDC) with provenance, and creates the GitHub release. There is no long-lived registry token.
 
 The package is licensed under Apache-2.0. See [LICENSE](LICENSE) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Adoption and upgrades
 
-Consumers follow [Install and configure](docs/adoption.md) to install the published version from GitHub Packages, mount the component, configure the Convex deployment and enqueue the first event, and [Tinybird setup](docs/tinybird-setup.md) to provision workspaces, schema, tokens and browser reads for each environment.
+Consumers follow [Install and configure](docs/adoption.md) to install the published version from npm, mount the component, configure the Convex deployment and enqueue the first event, and [Tinybird setup](docs/tinybird-setup.md) to provision workspaces, schema, tokens and browser reads for each environment.
 
-Maintainers run `bash scripts/clean-consumer.sh` with the repository's Node 24.19 toolchain. It installs the archive (or, with `CONVEX_TINYBIRD_CONSUMER_SPEC` and a `NODE_AUTH_TOKEN`, a published version) and Convex as the only direct runtime dependencies of a temporary app outside the workspace. Development tools are installed separately. It runs anonymous local Convex setup, explicit codegen, typechecking and a test with stubbed delivery. The fixture uses a `tickets` table and its own `workspaceKey` tenancy field. It rejects unauthorized reads, uses no workspace aliases, and deletes the temporary app when finished. It needs registry and Convex binary-download access; no cloud credentials or Tinybird workspace are needed. CI runs this as a required job for package and installation changes.
+Maintainers run `bash scripts/clean-consumer.sh` with the repository's Node 24.19 toolchain. It installs the archive (or, with `CONVEX_TINYBIRD_CONSUMER_SPEC`, a published version from npm) and Convex as the only direct runtime dependencies of a temporary app outside the workspace. Development tools are installed separately. It runs anonymous local Convex setup, explicit codegen, typechecking and a test with stubbed delivery. The fixture uses a `tickets` table and its own `workspaceKey` tenancy field. It rejects unauthorized reads, uses no workspace aliases, and deletes the temporary app when finished. It needs registry and Convex binary-download access; no cloud credentials or Tinybird workspace are needed. CI runs this as a required job for package and installation changes.
 
 After publication, releases follow semantic versioning: patch releases fix compatible behavior, minor releases add compatible capabilities, and major releases may change the API or event contract. During `0.x`, treat minor upgrades as potentially breaking and review the changelog. Pin the version adopted by your app, upgrade first in staging, and rerun its delivery/read tests. Regenerate the consumer's `_generated` bindings with `convex dev` after mounting or upgrading; do not copy another app's generated bindings or manually edit the package internals. Source checkout users rebuild after changes; archive users receive the compiled artifacts.

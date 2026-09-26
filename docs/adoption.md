@@ -4,32 +4,17 @@ This is the consumer guide: install the published package, mount the component, 
 credentials on the Convex deployment, send a first event, and upgrade safely. Tinybird-side
 provisioning (workspaces, schema, tokens, browser reads) is in [Tinybird setup](tinybird-setup.md).
 
-## Install from GitHub Packages
+## Install from npm
 
-The package is published to GitHub Packages under the `@fantasticdevhq` scope. While the
-repository is private, installing it needs a GitHub token with `read:packages` for an account
-that can see `FantasticDevHQ/convex-tinybird`. Map the scope to GitHub Packages in your app's
-`.npmrc` and keep the token in your user-level config or the environment; never commit a token:
-
-```ini
-@fantasticdevhq:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
-```
-
-Then install the pinned version alongside Convex:
+The package is published publicly to npmjs.com. Install the pinned version alongside Convex; no
+registry token or `.npmrc` scope mapping is needed:
 
 ```bash
-NODE_AUTH_TOKEN=<token> npm install @fantasticdevhq/convex-tinybird@0.1.0 convex@^1.44.0
+npm install @fantastic.dev/convex-tinybird@0.2.0 convex@^1.44.0
 ```
 
-pnpm reads the same `.npmrc`, with one difference: pnpm refuses to expand a credential from a
-committed project `.npmrc`, so with pnpm put the `_authToken` line in `~/.npmrc` (or run
-`npm config set "//npm.pkg.github.com/:_authToken" <token> --location=user`) and keep only the
-scope line in the project file. In GitHub Actions, `actions/setup-node` with
-`registry-url: https://npm.pkg.github.com` and `scope: "@fantasticdevhq"` writes the user-level
-mapping for you; set `NODE_AUTH_TOKEN` on the install step to a token that can read the package
-(the workflow's own `GITHUB_TOKEN` once the package grants that repository access, or a
-fine-grained token stored as a secret).
+Each release is published from this repository's `Release` workflow with npm provenance, so
+`npm audit signatures` can confirm the tarball was built from the tagged commit.
 
 The app's only direct runtime dependencies for this integration are the component and Convex;
 Workpool is installed transitively. Test tooling belongs in development dependencies.
@@ -40,7 +25,7 @@ Create or update your app's `convex/convex.config.ts`:
 
 ```ts
 import { defineApp } from "convex/server";
-import tinybird from "@fantasticdevhq/convex-tinybird/convex.config";
+import tinybird from "@fantastic.dev/convex-tinybird/convex.config";
 
 const app = defineApp();
 app.use(tinybird, {
@@ -106,7 +91,7 @@ In an existing authenticated host mutation, construct the client from the genera
 enqueue alongside the domain write:
 
 ```ts
-import { TinybirdDelivery } from "@fantasticdevhq/convex-tinybird";
+import { TinybirdDelivery } from "@fantastic.dev/convex-tinybird";
 import { components } from "./_generated/api";
 
 const analytics = new TinybirdDelivery(components.events);
