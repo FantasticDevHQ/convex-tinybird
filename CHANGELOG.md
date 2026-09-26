@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.1...v0.2.2) (2026-09-26)
+
+
+### Documentation
+
+* non-feature commits still open a patch release PR (FTD-2878) ([1b400e3](https://github.com/FantasticDevHQ/convex-tinybird/commit/1b400e341e25ee14f7ddd55fdfce316e35bfb1df))
+* non-feature commits still open a patch release PR (FTD-2878) ([fc305d6](https://github.com/FantasticDevHQ/convex-tinybird/commit/fc305d66811835a50b43d6d83778fff77a0b55c1))
+
 ## [0.2.1](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.0...v0.2.1) (2026-09-26)
 
 
