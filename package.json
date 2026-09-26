@@ -1,6 +1,6 @@
 {
   "name": "@fantastic.dev/convex-tinybird",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "sideEffects": false,
   "description": "Reusable Convex component for shipping analytics events to Tinybird, independent of any host application's schema, auth or packages.",
