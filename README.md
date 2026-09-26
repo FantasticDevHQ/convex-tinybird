@@ -549,7 +549,7 @@ Versions come from Conventional Commit PR titles, which become the squash-merge 
 - `fix: …` makes a patch release.
 - `feat: …` makes a minor release.
 - `feat!: …` (or a `BREAKING CHANGE:` footer) makes a minor release while the package is `0.x`, matching the upgrade policy below.
-- `docs:`, `chore:`, `ci:`, `refactor:`, `test:`, `build:` and `perf:` appear in the changelog without forcing a release of their own.
+- `docs:`, `chore:`, `ci:`, `refactor:`, `test:`, `build:` and `perf:` appear in the changelog too. On their own they still open a patch release PR, which you can leave open to collect more changes: nothing publishes until that PR is merged.
 
 A title that isn't a Conventional Commit is left out of the changelog. Don't bump the version by hand. Release policy lives in `release-please-config.json`, and the manifest records the last released version.
 
