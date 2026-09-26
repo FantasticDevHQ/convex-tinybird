@@ -66,15 +66,15 @@
     "convex": "^1.44.0"
   },
   "devDependencies": {
-    "@types/node": "^24.10.11",
-    "convex": "^1.44.0",
-    "convex-test": "^0.0.55",
-    "vite": "8.2.1",
-    "vitest": "^4.1.10",
-    "typescript": "^5.9.3"
+    "@types/node": "^24.13.6",
+    "convex": "^1.46.0",
+    "convex-test": "^0.0.60",
+    "vite": "8.3.1",
+    "vitest": "^5.0.1",
+    "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@convex-dev/workpool": "0.4.10"
+    "@convex-dev/workpool": "0.4.12"
   },
   "license": "Apache-2.0",
   "files": [

@@ -30,7 +30,6 @@
       "@playwright/test"
     ],
     "jsx": "react-jsx",
-    "baseUrl": ".",
     "paths": {
       "@/*": [
         "./src/*"
