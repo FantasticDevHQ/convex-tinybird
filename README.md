@@ -540,7 +540,22 @@ Installation builds the package through `prepare`, so tests and development comm
 
 Run `pnpm run check:pack` to check npm's dry-run file list, reject unexpected files and host references, and resolve runtime exports from an extracted tarball. This maintainer gate requires Node, pnpm, npm, `tar` and a symlink-capable filesystem; run it on macOS or Linux, matching CI. It is part of `pnpm run check`. `npm pack` builds through `prepack`. Test suites, fixtures, example apps and environment files are excluded.
 
-Releases are published to npmjs.com by the `Release` workflow when a `vX.Y.Z` tag is pushed; the workflow refuses a tag that does not match `package.json` and `CHANGELOG.md`, runs the full check, publishes through npm trusted publishing (OIDC) with provenance, and creates the GitHub release. There is no long-lived registry token.
+### Releases
+
+[Release Please](https://github.com/googleapis/release-please-action) keeps a release PR open after changes merge into `main`. The PR updates `package.json`, `CHANGELOG.md` and `.release-please-manifest.json`. Merging it is the release decision. The same `Release` workflow run then tags the version, creates the GitHub release and publishes to npmjs.com. Release PRs are never merged automatically, and releasing needs neither a direct push to `main` nor an npm token.
+
+Versions come from Conventional Commit PR titles, which become the squash-merge commit:
+
+- `fix: …` makes a patch release.
+- `feat: …` makes a minor release.
+- `feat!: …` (or a `BREAKING CHANGE:` footer) makes a minor release while the package is `0.x`, matching the upgrade policy below.
+- `docs:`, `chore:`, `ci:`, `refactor:`, `test:`, `build:` and `perf:` appear in the changelog without forcing a release of their own.
+
+A title that isn't a Conventional Commit is left out of the changelog. Don't bump the version by hand. Release policy lives in `release-please-config.json`, and the manifest records the last released version.
+
+Before publishing, the workflow refuses a tag that doesn't match `package.json` or has no `CHANGELOG.md` section (`scripts/release-notes.mjs`), then runs `pnpm run check`. It publishes through npm trusted publishing (OIDC) with provenance, so no long-lived registry token exists. Keep the workflow file named `release.yml`, because the trusted publisher on npmjs.com is bound to that filename.
+
+A manually pushed `vX.Y.Z` tag still publishes, and the workflow then creates the GitHub release from the changelog section. If publishing fails after Release Please has created the GitHub release, use **Re-run failed jobs** on that run so the job keeps its release outputs. Check npm first if the outcome is uncertain: a published version can't be overwritten.
 
 The package is licensed under Apache-2.0. See [LICENSE](LICENSE) and [CHANGELOG.md](CHANGELOG.md).
 
