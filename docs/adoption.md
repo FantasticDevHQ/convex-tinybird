@@ -44,6 +44,12 @@ its tables. The left-hand keys are the component's contract (`TINYBIRD_TOKEN`, `
 and for browser reads `TINYBIRD_ADMIN_TOKEN`, `TINYBIRD_WORKSPACE_ID`); the right-hand
 `process.env.*` names are yours, so two mounts can read differently named variables.
 
+On TypeScript 6 or later, `convex dev` fails its typecheck with `Cannot find name 'process'` unless
+`convex/tsconfig.json` names Node's types. TypeScript 6 no longer includes installed `@types/*`
+packages automatically, and the `convex/tsconfig.json` that Convex generates doesn't list any. Install
+`@types/node` as a development dependency and add `"types": ["node"]` to that file's
+`compilerOptions`.
+
 ## Configure the Convex deployment
 
 **The variables live on the Convex deployment, not in a local `.env` file.** The `process.env.*`
