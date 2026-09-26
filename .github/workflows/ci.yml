@@ -4,7 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  # The Release workflow dispatches this for release PRs, which GITHUB_TOKEN opens without CI.
   workflow_dispatch:
 
 permissions:
