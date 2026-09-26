@@ -5,7 +5,7 @@
  * for a short-lived JWT scoped to the demo's endpoints, keeps it in memory, and renews it before
  * expiry. Every read goes through the package's `./browser` entry.
  */
-import { queryPipe, TinybirdQueryError } from "@fantasticdevhq/convex-tinybird/browser";
+import { queryPipe, TinybirdQueryError } from "@fantastic.dev/convex-tinybird/browser";
 
 export type ReadToken = { token: string; expiresAt: number; host: string };
 

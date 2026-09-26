@@ -48,7 +48,7 @@ screenshot as an artifact. The page's pure helpers (`src/metrics.ts`) have Vites
 ## What it is proving
 
 The component has to work in an application that knows nothing about it. So this app has an
-ordinary domain schema (`orders`), its backend imports `convex` and `@fantasticdevhq/convex-tinybird`
+ordinary domain schema (`orders`), its backend imports `convex` and `@fantastic.dev/convex-tinybird`
 and nothing else, and it mounts the component twice under different names. The demo page adds
 React and Vite to the example's dependencies; the boundary gate scans `convex/`, where the
 portability claim lives, and the page reaches the component only through the app's own queries
@@ -61,7 +61,7 @@ switch stopping both streams, would pass there and fail here.
 ## What is enforced, and by what
 
 - **Runtime dependencies** are enforced by `scripts/check-boundary.mjs`, which scans
-  `example/convex` as well as `src`. It permits `@fantasticdevhq/convex-tinybird` and rejects
+  `example/convex` as well as `src`. It permits `@fantastic.dev/convex-tinybird` and rejects
   every other `@fantastic-dev/` package, `packages/backend`, and Better Auth. Component-only
   restrictions on identity reads do not apply to the host example.
 - **The tsconfig mirrors the package's own compiler flags**, and that is not a hole in the claim:

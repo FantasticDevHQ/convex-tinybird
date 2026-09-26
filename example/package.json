@@ -1,5 +1,5 @@
 {
-  "name": "@fantasticdevhq/convex-tinybird-example",
+  "name": "@fantastic.dev/convex-tinybird-example",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
-    "@fantasticdevhq/convex-tinybird": "workspace:*",
+    "@fantastic.dev/convex-tinybird": "workspace:*",
     "@fontsource-variable/geist": "^5.3.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.3.0",

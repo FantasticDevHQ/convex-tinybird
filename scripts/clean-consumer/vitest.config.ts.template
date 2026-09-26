@@ -6,7 +6,7 @@ export default defineConfig({
     server: {
       deps: {
         inline: [
-          "@fantasticdevhq/convex-tinybird",
+          "@fantastic.dev/convex-tinybird",
           "@convex-dev/workpool",
           "@convex-dev/batch-worker",
           "convex-test",

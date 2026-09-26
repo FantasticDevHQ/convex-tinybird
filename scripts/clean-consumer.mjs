@@ -18,11 +18,10 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /**
  * By default the consumer installs the tarball this checkout packs. Set
- * CONVEX_TINYBIRD_CONSUMER_SPEC to a registry spec (e.g. `@fantasticdevhq/convex-tinybird@0.1.0`)
+ * CONVEX_TINYBIRD_CONSUMER_SPEC to a registry spec (e.g. `@fantastic.dev/convex-tinybird@0.1.0`)
  * to install a PUBLISHED version instead; that is the release gate's proof that the registry
  * artifact, not the local tree, works in an independent app. A published spec is read from the
- * private GitHub Packages registry, so the caller must also supply NODE_AUTH_TOKEN with
- * `read:packages`; it is passed through to npm only, never to Convex.
+ * public npm registry and needs no token.
  */
 const consumerSpec = process.env.CONVEX_TINYBIRD_CONSUMER_SPEC;
 const environment = Object.fromEntries(
@@ -31,9 +30,6 @@ const environment = Object.fromEntries(
   ),
 );
 environment.CONVEX_AGENT_MODE = "anonymous";
-const installEnvironment = process.env.NODE_AUTH_TOKEN
-  ? { ...environment, NODE_AUTH_TOKEN: process.env.NODE_AUTH_TOKEN }
-  : environment;
 
 function run(command, args, cwd, timeout = 180000, env = environment) {
   const result = spawnSync(command, args, {
@@ -73,7 +69,7 @@ try {
     // spec and installs a self-link instead of the registry artifact (found the first time this
     // ran against the real registry).
     spec = consumerSpec.slice(name.length + 1);
-    process.stdout.write(`Installing the published ${consumerSpec} from GitHub Packages.\n`);
+    process.stdout.write(`Installing the published ${consumerSpec} from npm.\n`);
   } else {
     const packed = JSON.parse(run("npm", ["pack", "--json", "--pack-destination", temp], root));
     spec = `file:${join(temp, packed[0].filename)}`;
@@ -105,17 +101,13 @@ try {
   };
   writeFileSync(join(consumer, "package.json"), JSON.stringify(manifest, null, 2));
   if (consumerSpec) {
-    // Scope-only registry mapping; the token comes from NODE_AUTH_TOKEN and is never written.
+    // Pin the scope to the public registry so a user-level mapping can't redirect the install.
     writeFileSync(
       join(consumer, ".npmrc"),
-      [
-        `${name.slice(0, name.indexOf("/"))}:registry=https://npm.pkg.github.com`,
-        "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}",
-        "",
-      ].join("\n"),
+      `${name.slice(0, name.indexOf("/"))}:registry=https://registry.npmjs.org/\n`,
     );
   }
-  run("npm", ["install", "--no-audit", "--no-fund"], consumer, 300000, installEnvironment);
+  run("npm", ["install", "--no-audit", "--no-fund"], consumer, 300000);
   const installed = realpathSync(join(consumer, "node_modules", name));
   if (!installed.startsWith(realpathSync(consumer) + "/"))
     throw new Error("Component resolved outside the independent consumer");
@@ -124,9 +116,9 @@ try {
   if (entry?.link) throw new Error("Consumer used a workspace link instead of the artifact");
   if (consumerSpec) {
     const expected = consumerSpec.slice(name.length + 1);
-    if (entry?.version !== expected || !/^https:\/\/npm\.pkg\.github\.com\//u.test(entry?.resolved ?? ""))
+    if (entry?.version !== expected || !/^https:\/\/registry\.npmjs\.org\//u.test(entry?.resolved ?? ""))
       throw new Error(
-        `Consumer did not install ${name}@${expected} from GitHub Packages (got ${entry?.version} from ${entry?.resolved})`,
+        `Consumer did not install ${name}@${expected} from npm (got ${entry?.version} from ${entry?.resolved})`,
       );
   }
   process.stdout.write(

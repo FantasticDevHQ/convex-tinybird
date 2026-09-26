@@ -63,11 +63,12 @@ export function checkPackedFiles(root, packed) {
       continue;
     }
     const text = readFileSync(join(root, path), "utf8");
-    // Two scopes are checked: the host monorepo's `@fantastic-dev/` (nothing from it may leak
-    // into the artifact) and this package's own scope, where only the exact package name and its
-    // subpaths are allowed — not a sibling package sharing the prefix.
+    // Three scopes are checked: the host monorepo's `@fantastic-dev/` (nothing from it may leak
+    // into the artifact), this package's own `@fantastic.dev/` scope, where only the exact package
+    // name and its subpaths are allowed — not a sibling package sharing the prefix — and the retired
+    // `@fantasticdevhq/` scope, so a stale pre-rename reference can't ship.
     const references =
-      text.match(/@(?:fantastic-dev|fantasticdevhq)\/[a-zA-Z0-9_.*-]+/gu) ?? [];
+      text.match(/@(?:fantastic-dev|fantastic\.dev|fantasticdevhq)\/[a-zA-Z0-9_.*-]+/gu) ?? [];
     if (references.some((reference) => reference !== name))
       failures.push(`Host reference in packed file: ${path}`);
   }

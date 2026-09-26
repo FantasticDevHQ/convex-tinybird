@@ -1,4 +1,4 @@
-import { register } from "@fantasticdevhq/convex-tinybird/test";
+import { register } from "@fantastic.dev/convex-tinybird/test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convexTest } from "convex-test";
 
