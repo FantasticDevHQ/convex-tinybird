@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.4](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.3...v0.2.4) (2026-09-26)
+
+
+### Continuous Integration
+
+* **release:** open release PRs with the org release GitHub App ([bfe0395](https://github.com/FantasticDevHQ/convex-tinybird/commit/bfe0395c148f80b723fc21729643d04ab6f17392))
+* **release:** open release PRs with the org release GitHub App ([ea248d5](https://github.com/FantasticDevHQ/convex-tinybird/commit/ea248d58071438c6c0fe7caaefbd6c4a61f03294))
+
 ## [0.2.3](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.2...v0.2.3) (2026-09-26)
 
 
