@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.5](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.4...v0.2.5) (2026-10-22)
+
+
+### Maintenance
+
+* bump Node.js to 24.22.1 ([7f1f2ef](https://github.com/FantasticDevHQ/convex-tinybird/commit/7f1f2efcef9fdf43fc504f52a8c5727c378f93fc))
+* bump Node.js to 24.22.1 ([c8aafc8](https://github.com/FantasticDevHQ/convex-tinybird/commit/c8aafc8401167985d1ce9d66781bb5bfebb9bdf9))
+
 ## [0.2.4](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.3...v0.2.4) (2026-09-26)
 
 
