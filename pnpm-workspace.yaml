@@ -14,3 +14,11 @@ patchedDependencies:
 
 allowBuilds:
   esbuild: true
+
+# body-parser is not a direct dependency. The only path that pulls it in is
+# example → shadcn → @modelcontextprotocol/sdk → express → body-parser.
+# express@5.2.1 and express@5.3.0 both declare body-parser ^2.3.0 and do not
+# pin 2.4.0, so a parent bump cannot force the patched release. Override it
+# here. The only direct ancestor is shadcn; that bump lives on PR #15.
+overrides:
+  body-parser: 2.4.0
