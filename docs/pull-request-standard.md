@@ -140,3 +140,19 @@ Verify the actual job's labels, runner name/ID and terminal result through the
 Actions jobs API before describing it as a successful UbiCloud run. Metadata
 validation keeps its existing permissions, five-minute bound and trusted-code
 checkout; it never runs a PR's untrusted head with write permissions.
+
+## Required status names
+
+The canonical required statuses are `PR standard`, `Repository quality gates`,
+and `Real app backend isolation` because this repository ships a Convex example.
+The quality aggregate requires Package checks, Example demo (browser), Independent
+consumer, and Real worktree isolation to succeed. The isolation aggregate requires
+the actual example backend integration job to succeed. Both run after dependencies
+finish and reject failed, canceled, or skipped work. Existing individual status
+names remain available for current protection rules.
+
+The default integration branch is `main`. Activate canonical required statuses only
+after their workflows exist on the base and have actually emitted the contexts;
+read back the GitHub App identity and effective branch rules through the API.
+Keep additional required checks and review policies. UbiCloud Linux is sufficient;
+macOS qualification is not required.
