@@ -150,6 +150,7 @@ function uiEvidenceErrors(text, files) {
     );
   const uiFiles = files.some(
     (path) =>
+      !/^\.github\//.test(path) &&
       !/(^|\/)(tests?|__tests__|fixtures)(\/|$)|\.(test|spec)\./i.test(path) &&
       /\.(tsx|jsx|css|scss|sass|less|html|vue|svelte|svg|png|jpe?g|webp|gif)$/i.test(
         path,

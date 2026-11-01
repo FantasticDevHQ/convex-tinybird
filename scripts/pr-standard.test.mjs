@@ -303,3 +303,7 @@ test("requires a UI declaration and uploaded screenshot or video for UI changes"
     [],
   );
 });
+
+test("repository branding assets do not imply application UI changes", () => {
+  assert.deepEqual(validatePullRequest({ title, body }, [".github/assets/fantastic-dev-logo.svg"]), []);
+});
