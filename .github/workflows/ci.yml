@@ -112,3 +112,35 @@ jobs:
         run: |
           echo "Runner $RUNNER_NAME ($RUNNER_OS/$RUNNER_ARCH)"
           uname -a
+
+  repository-quality-gates:
+    name: Repository quality gates
+    needs: [check, example-demo, clean-consumer, worktree-isolation]
+    if: ${{ always() }}
+    runs-on: ubicloud-standard-2-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - name: Require every repository check to succeed
+        env:
+          REQUIRED_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          results = json.loads(os.environ["REQUIRED_RESULTS"])
+          expected = {"check", "example-demo", "clean-consumer", "worktree-isolation"}
+          assert set(results) == expected, f"Missing required jobs: {results}"
+          failures = {name: job["result"] for name, job in results.items() if job["result"] != "success"}
+          assert not failures, f"Required jobs did not succeed: {failures}"
+          PYTHON
+
+  real-app-backend-isolation:
+    name: Real app backend isolation
+    needs: [worktree-isolation]
+    if: ${{ always() }}
+    runs-on: ubicloud-standard-2-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - name: Require actual Convex example isolation to succeed
+        env:
+          ISOLATION_RESULT: ${{ needs.worktree-isolation.result }}
+        run: test "$ISOLATION_RESULT" = success
