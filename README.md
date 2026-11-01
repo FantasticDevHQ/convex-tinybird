@@ -1,3 +1,9 @@
+[![Fantastic.Dev](.github/assets/fantastic-dev-badge.svg)](https://fantastic.dev)
+
+[A Fantastic.Dev Project](https://fantastic.dev)
+
+<img src=".github/assets/fantastic-dev-logo.svg" alt="Fantastic.Dev" width="48">
+
 # @fantastic.dev/convex-tinybird
 
 A reusable Convex component for delivering analytics events to Tinybird. Enqueue runs in the

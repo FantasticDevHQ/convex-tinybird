@@ -7,3 +7,5 @@ dist/
 .tinybird-codegen-*/
 *.tgz
 .DS_Store
+
+.worktree/

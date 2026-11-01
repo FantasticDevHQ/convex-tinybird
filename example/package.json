@@ -6,7 +6,7 @@
   "description": "Minimal Convex app that mounts two named instances of the Tinybird component, plus a small Vite page that shows the metrics it tracks. Exists to prove the component is portable: the backend depends on convex and the component and nothing else.",
   "scripts": {
     "codegen": "CONVEX_AGENT_MODE=anonymous convex dev --once",
-    "test": "vitest run",
+    "test": "vitest run --maxWorkers=1",
     "typecheck": "tsc --noEmit",
     "dev": "node scripts/dev.mjs",
     "build": "vite build",
