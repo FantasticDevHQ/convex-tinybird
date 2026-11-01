@@ -15,6 +15,7 @@ export async function enforcePullRequestStandard({ api, number, runUrl }) {
       description,
       target_url: runUrl,
     });
+  try {
   await status("pending", "Checking PR title and required sections");
   const files = [];
   for (let page = 1; ; page++) {
@@ -59,6 +60,10 @@ export async function enforcePullRequestStandard({ api, number, runUrl }) {
       : "PR title and required sections meet the standard",
   );
   return errors.length === 0;
+  } catch (error) {
+    try { await status("failure", "PR metadata enforcement failed; inspect workflow logs"); } catch {}
+    throw error;
+  }
 }
 
 async function main() {

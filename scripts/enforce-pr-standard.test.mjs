@@ -110,7 +110,7 @@ test("valid PR needs no new comment; closed PRs receive no writes", async () => 
   assert.equal(closed.calls.length, 1);
 });
 
-test("API failure leaves the required status pending instead of passing", async () => {
+test("API failure publishes a failing status instead of passing", async () => {
   const states = [];
   const api = async (method, path, data) => {
     if (path === "/pulls/65") return valid;
@@ -126,5 +126,32 @@ test("API failure leaves the required status pending instead of passing", async 
     }),
     /GitHub unavailable/,
   );
-  assert.deepEqual(states, ["pending"]);
+  assert.deepEqual(states, ["pending", "failure"]);
+});
+
+for (const ending of ["\n", "\r\n", "\r"]) {
+  test(`valid and invalid actual metadata with ${JSON.stringify(ending)} line endings`, async () => {
+    const good = fixture({ ...valid, body: valid.body.replaceAll("\n", ending) });
+    assert.equal(await good.run(), true);
+    const bad = fixture({ ...valid, body: valid.body.replace("Refs JIF-65", "Refs FANT-92").replaceAll("\n", ending) });
+    assert.equal(await bad.run(), false);
+  });
+}
+
+test("failure-status publication is best effort and preserves the original error", async () => {
+  const original = new Error("files API unavailable");
+  const states = [];
+  await assert.rejects(enforcePullRequestStandard({
+    number: 65, runUrl: "https://github.com/run",
+    api: async (method, path, data) => {
+      if (path === "/pulls/65") return valid;
+      if (path.startsWith("/statuses/")) {
+        states.push(data.state);
+        if (data.state === "failure") throw new Error("status API unavailable");
+        return {};
+      }
+      throw original;
+    },
+  }), (error) => error === original);
+  assert.deepEqual(states, ["pending", "failure"]);
 });

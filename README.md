@@ -1,8 +1,8 @@
-[![Fantastic.Dev](docs/assets/fantastic-dev-badge.svg)](https://fantastic.dev)
+[![Fantastic.Dev](.github/assets/fantastic-dev-badge.svg)](https://fantastic.dev)
 
 [A Fantastic.Dev Project](https://fantastic.dev)
 
-<img src="docs/assets/fantastic-dev-logo.svg" alt="Fantastic.Dev" width="48">
+<img src=".github/assets/fantastic-dev-logo.svg" alt="Fantastic.Dev" width="48">
 
 # @fantastic.dev/convex-tinybird
 

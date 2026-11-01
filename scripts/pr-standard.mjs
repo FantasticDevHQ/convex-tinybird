@@ -180,7 +180,7 @@ export function validatePullRequest({ title = "", body = "" }, files = []) {
     errors.push(
       "Use `type(scope): TICKET-123 description` or `type: TICKET-123 description`. Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert. Example: `fix(auth): JIF-65 correct session expiry`.",
     );
-  const found = parseSections((body ?? "").replace(/<!--[\s\S]*?(-->|$)/g, ""));
+  const found = parseSections((body ?? "").replace(/\r\n?/g, "\n").replace(/<!--[\s\S]*?(-->|$)/g, ""));
   for (const name of sections) {
     const matches = found.filter((section) => section.name === name);
     if (matches.length !== 1)
