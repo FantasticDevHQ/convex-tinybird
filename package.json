@@ -54,13 +54,21 @@
     "check:boundary": "node scripts/check-boundary.mjs",
     "check:secrets": "node scripts/check-no-secrets.mjs",
     "codegen": "convex codegen --component-dir src/component",
-    "test": "vitest run",
+    "test": "vitest run --maxWorkers=1",
     "typecheck": "tsc --noEmit",
-    "check": "pnpm run check:pack && node --test scripts/check-pack.test.mjs && pnpm run typecheck && pnpm run test && pnpm run check:boundary && pnpm run check:secrets && node scripts/check-codegen-fresh.mjs && node scripts/check-readme-samples.mjs && node --test scripts/check-boundary.test.mjs scripts/check-no-secrets.test.mjs scripts/check-codegen-fresh.test.mjs scripts/check-readme-samples.test.mjs scripts/release-notes.test.mjs && pnpm --dir example run typecheck && pnpm --dir example run test",
+    "check": "pnpm run test:standard && pnpm run check:pack && node --test --test-concurrency=1 scripts/check-pack.test.mjs && pnpm run typecheck && pnpm run test && pnpm run check:boundary && pnpm run check:secrets && node scripts/check-codegen-fresh.mjs && node scripts/check-readme-samples.mjs && node --test --test-concurrency=1 scripts/check-boundary.test.mjs scripts/check-no-secrets.test.mjs scripts/check-codegen-fresh.test.mjs scripts/check-readme-samples.test.mjs scripts/release-notes.test.mjs && pnpm --dir example run typecheck && pnpm --dir example run test",
     "build": "tsc --project tsconfig.build.json",
     "check:pack": "pnpm run build && node scripts/check-pack.mjs",
     "prepack": "pnpm run build",
-    "prepare": "pnpm run build"
+    "prepare": "pnpm run build",
+    "worktree:setup": "node scripts/worktree/cli.mjs setup",
+    "worktree:start": "node scripts/worktree/cli.mjs start",
+    "worktree:stop": "node scripts/worktree/cli.mjs stop",
+    "worktree:teardown": "node scripts/worktree/cli.mjs teardown",
+    "worktree:cleanup": "node scripts/worktree/cli.mjs cleanup",
+    "worktree:prune": "node scripts/worktree/cli.mjs prune",
+    "test:standard": "node --test --test-concurrency=1 scripts/pr-standard.test.mjs scripts/enforce-pr-standard.test.mjs scripts/worktree/*.test.mjs",
+    "test:worktree:integration": "node --test --test-concurrency=1 scripts/worktree/worktree.integration.mjs"
   },
   "peerDependencies": {
     "convex": "^1.44.0"

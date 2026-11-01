@@ -1,0 +1,19 @@
+{
+  "backend": "example",
+  "frontend": "example",
+  "env": {
+    "PRODUCT_TINYBIRD_HOST": "http://127.0.0.1:1",
+    "AUDIT_TINYBIRD_HOST": "http://127.0.0.1:1",
+    "PRODUCT_TINYBIRD_WORKSPACE_ID": "local-product",
+    "AUDIT_TINYBIRD_WORKSPACE_ID": "local-audit"
+  },
+  "secretEnv": [
+    "PRODUCT_TINYBIRD_TOKEN",
+    "AUDIT_TINYBIRD_TOKEN",
+    "PRODUCT_TINYBIRD_ADMIN_TOKEN",
+    "AUDIT_TINYBIRD_ADMIN_TOKEN"
+  ],
+  "siteUrlEnv": [],
+  "bootstrapMissingEnv": [],
+  "frontendFramework": "vite"
+}

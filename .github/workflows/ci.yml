@@ -16,7 +16,7 @@ concurrency:
 jobs:
   check:
     name: Package checks
-    runs-on: ubuntu-24.04
+    runs-on: ubicloud-standard-2-ubuntu-2404
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,11 +30,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Build, pack check, typecheck, tests, boundary, secret scan, codegen freshness, README
       # samples, gate self-tests, and the example app's typecheck and tests.
+      - name: Verify upstream toolkit export
+        run: |
+          git clone https://github.com/FantasticDevHQ/convex-worktrees.git "$RUNNER_TEMP/toolkit"
+          git -C "$RUNNER_TEMP/toolkit" checkout 52c0b76d960a98afedd48607d6737bc14a954c1e
+          cd "$RUNNER_TEMP/toolkit"
+          node scripts/check.mjs
       - run: pnpm run check
 
   example-demo:
     name: Example demo (browser)
-    runs-on: ubuntu-24.04
+    runs-on: ubicloud-standard-2-ubuntu-2404
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,7 +72,7 @@ jobs:
 
   clean-consumer:
     name: Independent consumer
-    runs-on: ubuntu-24.04
+    runs-on: ubicloud-standard-2-ubuntu-2404
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,3 +87,28 @@ jobs:
       # Installs the packed tarball and convex into a temporary app outside the workspace, runs
       # anonymous local codegen, typecheck and a stubbed-delivery test.
       - run: bash scripts/clean-consumer.sh
+
+  worktree-isolation:
+    name: Real worktree isolation
+    runs-on: ubicloud-standard-2-ubuntu-2404
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: Verify real app backends
+        run: pnpm run test:worktree:integration
+        env:
+          NODE_OPTIONS: --max-old-space-size=512
+      - name: Runner identity
+        if: always()
+        run: |
+          echo "Runner $RUNNER_NAME ($RUNNER_OS/$RUNNER_ARCH)"
+          uname -a
