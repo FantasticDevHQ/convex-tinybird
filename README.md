@@ -1,10 +1,33 @@
-[![Fantastic.Dev](.github/assets/fantastic-dev-badge.svg)](https://fantastic.dev)
+<p align="center">
+  <a href="https://fantastic.dev"><img src=".github/assets/fantastic-dev-logo.svg" width="80" height="80" alt="Fantastic.Dev" /></a>
+</p>
 
-[A Fantastic.Dev Project](https://fantastic.dev)
+<h1 align="center">Convex Tinybird</h1>
 
-<img src=".github/assets/fantastic-dev-logo.svg" alt="Fantastic.Dev" width="48">
+<p align="center"><strong>Durable analytics delivery from Convex to Tinybird.</strong></p>
 
-# @fantastic.dev/convex-tinybird
+<p align="center">A <a href="https://fantastic.dev">Fantastic.Dev</a> Project</p>
+
+<p align="center">
+  <a href="https://fantastic.dev"><img src="https://img.shields.io/badge/Fantastic.dev-94C173?style=for-the-badge&amp;logoColor=0c0e13" alt="Visit Fantastic.Dev" /></a>
+  <a href="https://github.com/FantasticDevHQ"><img src="https://img.shields.io/badge/GitHub-0c0e13?style=for-the-badge&amp;logo=github&amp;logoColor=white" alt="Fantastic.Dev on GitHub" /></a>
+  <a href="https://www.youtube.com/@FantasticDevHQ"><img src="https://img.shields.io/badge/YouTube-0c0e13?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Fantastic.Dev on YouTube" /></a>
+  <a href="https://twitter.com/FantasticDevHQ"><img src="https://img.shields.io/badge/Twitter_%2F_X-0c0e13?style=for-the-badge&amp;logo=x&amp;logoColor=white" alt="Fantastic.Dev on Twitter / X" /></a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@fantastic.dev/convex-tinybird"><img src="https://img.shields.io/npm/v/@fantastic.dev/convex-tinybird?style=flat-square" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/@fantastic.dev/convex-tinybird"><img src="https://img.shields.io/npm/dm/@fantastic.dev/convex-tinybird?style=flat-square" alt="npm monthly downloads" /></a>
+  <a href="https://github.com/FantasticDevHQ/convex-tinybird/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/FantasticDevHQ/convex-tinybird/ci.yml?branch=main&amp;style=flat-square&amp;label=checks" alt="Repository checks on main" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/FantasticDevHQ/convex-tinybird?style=flat-square" alt="Apache-2.0 license" /></a>
+  <a href="https://github.com/FantasticDevHQ/convex-tinybird/stargazers"><img src="https://img.shields.io/github/stars/FantasticDevHQ/convex-tinybird?style=flat-square" alt="GitHub stars" /></a>
+</p>
+
+<p align="center">
+  <a href="docs/adoption.md">Install and configure</a> · <a href="docs/tinybird-setup.md">Tinybird setup</a> · <a href="example/README.md">Example app</a>
+</p>
+
+---
 
 A reusable Convex component for delivering analytics events to Tinybird. Enqueue runs in the
 host mutation's transaction, so domain writes and the event commit or roll back together.
