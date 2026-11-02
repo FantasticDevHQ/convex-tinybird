@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.6](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.5...v0.2.6) (2026-11-02)
+
+
+### Documentation
+
+* FANT-122 adopt the Fantastic.Dev OSS header ([#20](https://github.com/FantasticDevHQ/convex-tinybird/issues/20)) ([cceab2f](https://github.com/FantasticDevHQ/convex-tinybird/commit/cceab2f28bd9341caf629e66a3e9af6a13ce5c63))
+* FANT-123 use YouTube red in the README header ([#21](https://github.com/FantasticDevHQ/convex-tinybird/issues/21)) ([f7ccf16](https://github.com/FantasticDevHQ/convex-tinybird/commit/f7ccf160233433f4822592d9e314c4f4ac9b72c6))
+
+
+### Maintenance
+
+* FANT-92 adopt shared repository and worktree standards ([#17](https://github.com/FantasticDevHQ/convex-tinybird/issues/17)) ([44551c6](https://github.com/FantasticDevHQ/convex-tinybird/commit/44551c6ea3a15bc5d5ffc31ec7bd56a3a07ea8bb))
+
+
+### Continuous Integration
+
+* FANT-92 emit canonical required status names ([#19](https://github.com/FantasticDevHQ/convex-tinybird/issues/19)) ([b0b35de](https://github.com/FantasticDevHQ/convex-tinybird/commit/b0b35de5068d44fc8cf8de89697e7a010b06b84c))
+
 ## [0.2.5](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.4...v0.2.5) (2026-10-31)
 
 
