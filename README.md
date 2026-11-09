@@ -582,6 +582,8 @@ Versions come from Conventional Commit PR titles, which become the squash-merge 
 
 A title that isn't a Conventional Commit is left out of the changelog. Don't bump the version by hand. Release policy lives in `release-please-config.json`, and the manifest records the last released version.
 
+Release PR titles include the owning Linear ticket. The `pull-request-title-pattern` in `release-please-config.json` must match that title because Release Please parses it again after merge. Update the configured ticket when release ownership changes. Keep the generated release notes between their standalone `---` delimiters when adding the required PR sections; changing those delimiters prevents Release Please from recognizing the merged release.
+
 Before publishing, the workflow refuses a tag that doesn't match `package.json` or has no `CHANGELOG.md` section (`scripts/release-notes.mjs`), then runs `pnpm run check`. It publishes through npm trusted publishing (OIDC) with provenance, so no long-lived registry token exists. Keep the workflow file named `release.yml`, because the trusted publisher on npmjs.com is bound to that filename.
 
 A manually pushed `vX.Y.Z` tag still publishes, and the workflow then creates the GitHub release from the changelog section. If publishing fails after Release Please has created the GitHub release, use **Re-run failed jobs** on that run so the job keeps its release outputs. Check npm first if the outcome is uncertain: a published version can't be overwritten.
