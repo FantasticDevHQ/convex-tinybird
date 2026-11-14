@@ -12,7 +12,11 @@ An existing version cannot be overwritten. If the workflow needed fixing, rerunn
 an old run still uses its old workflow: dispatch Release from the corrected main
 with `release_tag` set to the existing reviewed `vX.Y.Z` tag. The workflow checks
 that tag against package metadata, runs the original verification commands, then
-builds and publishes on the supported runner. Preserve existing tags, notes and
+builds and publishes on the supported runner. The checked-out release commit must
+match the workflow event commit so npm provenance describes the built source.
+Dispatch from a ref at that same reviewed commit. A corrected main workflow must
+not publish a different historical checkout under main's provenance identity;
+if an old immutable tag lacks the fix, prepare a new reviewed release instead. Preserve existing tags, notes and
 release assets; never mass-publish historical versions. Create a missing tag only
 at an accepted release commit through the repository's reviewed release process.
 
