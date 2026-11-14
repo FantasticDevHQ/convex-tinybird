@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.8](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.7...v0.2.8) (2026-11-14)
+
+
+### Bug Fixes
+
+* **release:** FORG-150 restore npm provenance publishing ([#23](https://github.com/FantasticDevHQ/convex-tinybird/issues/23)) ([d789e2e](https://github.com/FantasticDevHQ/convex-tinybird/commit/d789e2e443c93b87c9f9b6bb4c61827bb96a4198))
+
 ## [0.2.7](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.6...v0.2.7) (2026-11-09)
 
 
