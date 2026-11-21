@@ -64,11 +64,42 @@ jobs:
           permission-pull-requests: write
           permission-issues: write
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release-pr
         with:
           token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           skip-github-release: true
+
+      # Release PRs meet the PR standard like any other PR. `prs_created` is true
+      # whenever Release Please created or updated the release PR (it rewrites
+      # the branch and body on every update). The step amends the release commit
+      # with a `No-ticket: automated release` footer, force-pushes it with a
+      # lease using the App token (so CI runs on the new head), and appends the
+      # required sections after the generated body. See scripts/release-pr-standard.mjs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.release-pr.outputs.prs_created == 'true'
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.release-pr.outputs.prs_created == 'true'
+        with:
+          ref: ${{ fromJSON(steps.release-pr.outputs.pr).headBranchName }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: .release-pr
+          fetch-depth: 2 # the release commit and its parent, for the amend
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.release-pr.outputs.prs_created == 'true'
+        with:
+          node-version-file: .nvmrc
+      - name: Make the release PR meet the PR standard
+        if: steps.release-pr.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_PR: ${{ steps.release-pr.outputs.pr }}
+        run: node scripts/release-pr-standard.mjs .release-pr
 
   verify-release:
     name: Verify ${{ needs.release-please.outputs.tag_name || github.ref_name }}
