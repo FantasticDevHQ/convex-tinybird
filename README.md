@@ -527,15 +527,28 @@ See [architecture.md](./docs/architecture.md) for the state machine, scheduling 
 transaction boundaries, and recovery behavior. Source-linked excerpts above are checked against
 the example files; the README gate also verifies client methods, generated host references, and mount names.
 
-## Checking it locally
+## Contributing
 
-One command runs the whole portability battery — typecheck, tests, the boundary scan, the
-secrets scan, codegen freshness, every gate self-test, and the example app's own typecheck and
-tests:
+Contributions are welcome. Read the
+[contributing guide](https://github.com/FantasticDevHQ/.github/blob/main/CONTRIBUTING.md)
+and [Code of Conduct](https://github.com/FantasticDevHQ/.github/blob/main/CODE_OF_CONDUCT.md),
+and report vulnerabilities privately as described in the
+[security policy](https://github.com/FantasticDevHQ/.github/blob/main/SECURITY.md).
+
+Source development needs Node.js 24.22.1 or later (pinned in `.nvmrc`) and pnpm 11.18.0
+(pinned in `package.json`; enable it with Corepack).
+
+One command runs the whole portability battery — the PR-standard and worktree self-tests, the
+package check, typecheck, tests, the boundary scan, the secrets scan, codegen freshness, every
+gate self-test, and the example app's own typecheck and tests:
 
 ```bash
+pnpm install --frozen-lockfile
 pnpm run check
 ```
+
+Pull requests follow the [PR standard](docs/pull-request-standard.md); worktree development is
+described in [docs/worktrees.md](docs/worktrees.md).
 
 CI runs the same command, and needs no Tinybird credentials to do
 it: the suites refuse network access outright (`vitest.setup.ts` installs a `fetch` that rejects
@@ -588,12 +601,16 @@ Before publishing, the workflow refuses a tag that doesn't match `package.json` 
 
 A manually pushed `vX.Y.Z` tag still publishes, and the workflow then creates the GitHub release from the changelog section. If publishing fails after Release Please has created the GitHub release, use **Re-run failed jobs** on that run so the job keeps its release outputs. Check npm first if the outcome is uncertain: a published version can't be overwritten.
 
-The package is licensed under Apache-2.0. See [LICENSE](LICENSE) and [CHANGELOG.md](CHANGELOG.md).
+See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Adoption and upgrades
 
 Consumers follow [Install and configure](docs/adoption.md) to install the published version from npm, mount the component, configure the Convex deployment and enqueue the first event, and [Tinybird setup](docs/tinybird-setup.md) to provision workspaces, schema, tokens and browser reads for each environment.
 
-Maintainers run `bash scripts/clean-consumer.sh` with the repository's Node 24.19 toolchain. It installs the archive (or, with `CONVEX_TINYBIRD_CONSUMER_SPEC`, a published version from npm) and Convex as the only direct runtime dependencies of a temporary app outside the workspace. Development tools are installed separately. It runs anonymous local Convex setup, explicit codegen, typechecking and a test with stubbed delivery. The fixture uses a `tickets` table and its own `workspaceKey` tenancy field. It rejects unauthorized reads, uses no workspace aliases, and deletes the temporary app when finished. It needs registry and Convex binary-download access; no cloud credentials or Tinybird workspace are needed. CI runs this as a required job for package and installation changes.
+Maintainers run `bash scripts/clean-consumer.sh` with the repository's Node 24.22.1 toolchain (`.nvmrc`). It installs the archive (or, with `CONVEX_TINYBIRD_CONSUMER_SPEC`, a published version from npm) and Convex as the only direct runtime dependencies of a temporary app outside the workspace. Development tools are installed separately. It runs anonymous local Convex setup, explicit codegen, typechecking and a test with stubbed delivery. The fixture uses a `tickets` table and its own `workspaceKey` tenancy field. It rejects unauthorized reads, uses no workspace aliases, and deletes the temporary app when finished. It needs registry and Convex binary-download access; no cloud credentials or Tinybird workspace are needed. CI runs this as a required job for package and installation changes.
 
 After publication, releases follow semantic versioning: patch releases fix compatible behavior, minor releases add compatible capabilities, and major releases may change the API or event contract. During `0.x`, treat minor upgrades as potentially breaking and review the changelog. Pin the version adopted by your app, upgrade first in staging, and rerun its delivery/read tests. Regenerate the consumer's `_generated` bindings with `convex dev` after mounting or upgrading; do not copy another app's generated bindings or manually edit the package internals. Source checkout users rebuild after changes; archive users receive the compiled artifacts.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
