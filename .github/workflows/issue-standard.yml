@@ -1,0 +1,31 @@
+# Closes issues that skip this repository's issue forms (for example issues
+# created with `gh issue create` or the API), always with a comment to the
+# author that explains what is missing. Reopens them once they conform.
+name: Issue standard
+on:
+  issues:
+    types: [opened, edited, reopened]
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: issue-standard-${{ github.event.issue.number }}
+  cancel-in-progress: false
+jobs:
+  issue-standard:
+    name: Issue standard
+    runs-on: ubicloud-standard-2-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: FantasticDevHQ/.github
+          ref: main
+          path: standard
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: node standard/scripts/enforce-issue-standard.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
