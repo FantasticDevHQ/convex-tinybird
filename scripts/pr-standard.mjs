@@ -1,6 +1,10 @@
 const sections = ["Summary", "What", "Why", "Evidence", "Agent"];
 const titlePattern =
-  /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9][a-z0-9./-]*\))?!?: [A-Z][A-Z0-9]+-[1-9]\d* \S.*$/;
+  /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9][a-z0-9./-]*\))?!?: \S.*$/;
+const ticketPattern = /^[A-Z][A-Z0-9]+-[1-9]\d*$/;
+// Linear's documented magic words: closing, non-closing and relation.
+const magicWord =
+  /^[ \t]*(?:[-*][ \t]*)?(close[sd]?|closing|fix(?:es|ed|ing)?|resolve[sd]?|resolving|complete[sd]?|completing|implement(?:s|ed|ing)?|linear issue|ref(?:s|erences)?|part of|contributes to|towards?|relate[sd] to)[ \t]+(.+?)[ \t]*$/i;
 
 function meaningful(text) {
   return text.split("\n").some((line) => {
@@ -22,7 +26,7 @@ function parseSections(body) {
   const found = [];
   let current;
   let fence;
-  for (const line of body.split("\n")) {
+  for (const line of body.replace(/\r\n?/g, "\n").split("\n")) {
     const marker = line.match(/^\s{0,3}(`{3,}|~{3,})/);
     const heading = !fence && line.match(/^#{1,2}\s+(.+?)\s*#*\s*$/);
     if (heading) {
@@ -108,34 +112,112 @@ function agentErrors(text) {
   return errors;
 }
 
-function linkageErrors(text, title) {
-  const ticket = title.match(/: ([A-Z][A-Z0-9]+-[1-9]\d*) /)?.[1];
-  if (!ticket) return [];
-  const declaration =
-    /^[ \t]*(?:[-*][ \t]*)?(?:close[sd]?|closing|fix(?:es|ed|ing)?|resolve[sd]?|resolving|complete[sd]?|completing|implement(?:s|ed|ing)?|linear issue|ref(?:s|erences)?|part of|contributes to|towards?|relate[sd] to)[ \t]+(\S+)[ \t]*$/i;
-  const matches = outsideFences(text)
-    .split("\n")
-    .filter((line) => {
-      const target = line.match(declaration)?.[1]?.replace(/^<|[>.,;]$/g, "");
-      if (target === ticket) return true;
-      try {
-        const url = new URL(target);
-        return (
-          url.protocol === "https:" &&
-          url.hostname === "linear.app" &&
-          url.pathname.match(
-            /^\/[^/]+\/issue\/([A-Z][A-Z0-9]+-[1-9]\d*)(?:\/|$)/,
-          )?.[1] === ticket
-        );
-      } catch {
-        return false;
-      }
+function ticketFrom(token) {
+  token = token.replace(/^<|[>.,;:]+$/g, "");
+  if (ticketPattern.test(token)) return token;
+  try {
+    const url = new URL(token);
+    if (url.protocol !== "https:" || url.hostname !== "linear.app") return;
+    return url.pathname.match(
+      /^\/[^/]+\/issue\/([A-Z][A-Z0-9]+-[1-9]\d*)(?:\/|$)/,
+    )?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+// GitHub issue references for contributors without Linear access:
+// `#42`, `owner/repo#42` or a full github.com issue URL.
+function issueFrom(token) {
+  token = token.replace(/^<|[>.,;:]+$/g, "");
+  if (/^(?:[\w.-]+\/[\w.-]+)?#[1-9]\d*$/.test(token)) return token;
+  try {
+    const url = new URL(token);
+    if (url.protocol !== "https:" || url.hostname !== "github.com") return;
+    return /^\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*\/?$/.test(url.pathname)
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// References declared with a magic word, one or more per line:
+// `Fixes ENG-1`, `Refs ENG-2, ENG-3 and DES-4`, full Linear issue URLs, or
+// GitHub issues such as `Fixes #42`. Every target on a line must be valid.
+export function declaredReferences(text) {
+  const tickets = new Set();
+  const issues = new Set();
+  for (const line of outsideFences(text).split("\n")) {
+    const targets = line.match(magicWord)?.[2];
+    if (!targets) continue;
+    const tokens = targets.split(/[\s,]+/).filter((token) => token && !/^and$/i.test(token));
+    const found = tokens.map((token) => {
+      const ticket = ticketFrom(token);
+      if (ticket) return { ticket };
+      const issue = issueFrom(token);
+      return issue ? { issue } : undefined;
     });
-  return matches.length === 1
-    ? []
-    : [
-        `In \`## Summary\`, include exactly one explicit linkage declaration for ${ticket}: \`Fixes ${ticket}\` only when completing it, \`Refs ${ticket}\` for partial work, or \`Relates to ${ticket}\` for a relation without status automation. A full Linear issue URL may replace the ID. Plain ticket links and PR comments do not satisfy this declaration.`,
-      ];
+    if (!found.length || !found.every(Boolean)) continue;
+    for (const ref of found) {
+      if (ref.ticket) tickets.add(ref.ticket);
+      else issues.add(ref.issue);
+    }
+  }
+  return { tickets, issues };
+}
+
+// Linear tickets declared with a magic word.
+export const declaredTickets = (text) => declaredReferences(text).tickets;
+
+const noTicket = (text, pattern) =>
+  outsideFences(text)
+    .split("\n")
+    .some((line) => {
+      const reason = line.match(pattern)?.[1];
+      return !!reason && meaningful(reason);
+    });
+
+function linkageErrors(text, title, commitTickets) {
+  const { tickets: declared, issues } = declaredReferences(text);
+  const required = new Set(commitTickets);
+  const titleTicket = title.match(/: ([A-Z][A-Z0-9]+-[1-9]\d*) /)?.[1];
+  if (titleTicket) required.add(titleTicket);
+  const errors = [];
+  const missing = [...required].filter((id) => !declared.has(id)).sort();
+  if (missing.length)
+    errors.push(
+      `In \`## Summary\`, declare every ticket this PR works on with a Linear magic word: missing ${missing.join(", ")}. Use \`Fixes ${missing[0]}\` only for completed work, \`Refs ${missing[0]}\` for partial work, or \`Relates to ${missing[0]}\` for a relation without status automation. Several IDs may follow one word, e.g. \`Fixes ${missing.join(", ")}\`. Linear does not re-detect tickets from earlier merges into a feature branch, so list them here.`,
+    );
+  if (
+    !declared.size &&
+    !issues.size &&
+    !required.size &&
+    !noTicket(text, /^[ \t]*(?:[-*][ \t]*)?No ticket:[ \t]*(.+)$/i)
+  )
+    errors.push(
+      "In `## Summary`, link the Linear ticket(s) or GitHub issue(s) with a magic word (`Fixes ENG-123`, `Refs ENG-123`, `Fixes #123`) or state `No ticket: <reason>`.",
+    );
+  return errors;
+}
+
+// Every non-merge commit names its Linear ticket or GitHub issue with a magic
+// word, or carries a `No-ticket: <reason>` footer. Returns the errors and the
+// Linear tickets referenced.
+export function commitErrors(commits = []) {
+  const errors = [];
+  const tickets = new Set();
+  for (const commit of commits) {
+    if (commit.merge) continue;
+    const message = commit.message ?? "";
+    const found = declaredReferences(message);
+    found.tickets.forEach((id) => tickets.add(id));
+    if (!found.tickets.size && !found.issues.size && !noTicket(message, /^No-ticket:[ \t]*(.+)$/im))
+      errors.push(
+        `Commit ${String(commit.sha ?? "").slice(0, 7) || "(unknown)"} "${message.split("\n")[0]}" has no ticket or issue reference. Add a body line such as \`Fixes ENG-123\`, \`Refs ENG-123\` or \`Fixes #123\`, or a \`No-ticket: <reason>\` footer, then reword the commit and push.`,
+      );
+  }
+  return { errors, tickets };
 }
 
 function uiEvidenceErrors(text, files) {
@@ -150,7 +232,6 @@ function uiEvidenceErrors(text, files) {
     );
   const uiFiles = files.some(
     (path) =>
-      !/^\.github\//.test(path) &&
       !/(^|\/)(tests?|__tests__|fixtures)(\/|$)|\.(test|spec)\./i.test(path) &&
       /\.(tsx|jsx|css|scss|sass|less|html|vue|svelte|svg|png|jpe?g|webp|gif)$/i.test(
         path,
@@ -163,25 +244,37 @@ function uiEvidenceErrors(text, files) {
   const video = text.match(
     /^\s*(?:[-*]\s*)?Video:[^\n]*?(https:\/\/[^\s)<>]+)/im,
   )?.[1];
+  // GitHub attachment uploads, or GitHub Actions artifacts (for example
+  // recordings from an end-to-end job), which headless agents can produce.
   const uploaded = (url) =>
     !!url &&
-    /^https:\/\/(github\.com\/user-attachments\/assets\/|(?:user-images|private-user-images)\.githubusercontent\.com\/)[^\s]+$/.test(
+    (/^https:\/\/(github\.com\/user-attachments\/assets\/|(?:user-images|private-user-images)\.githubusercontent\.com\/)[^\s]+$/.test(
       url,
-    );
+    ) ||
+      /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+\/artifacts\/\d+$/.test(
+        url,
+      ));
   if (!uploaded(screenshot) && !uploaded(video))
     errors.push(
-      "UI changes require screenshots and/or video uploaded through GitHub attachments. In Evidence, include `Screenshot: ![description](https://github.com/user-attachments/assets/...)` and/or `Video: https://github.com/user-attachments/assets/...`. At least one is required.",
+      "UI changes require screenshots and/or video uploaded through GitHub attachments, or a GitHub Actions artifact. In Evidence, include `Screenshot: ![description](https://github.com/user-attachments/assets/...)` and/or `Video: https://github.com/user-attachments/assets/...` (or `Video: https://github.com/<owner>/<repo>/actions/runs/<run>/artifacts/<id>`). At least one is required.",
     );
   return errors;
 }
 
-export function validatePullRequest({ title = "", body = "" }, files = []) {
+export function validatePullRequest(
+  { title = "", body = "" },
+  files = [],
+  commits = [],
+) {
+  title ??= "";
   const errors = [];
   if (!titlePattern.test(title.trim()))
     errors.push(
-      "Use `type(scope): TICKET-123 description` or `type: TICKET-123 description`. Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert. Example: `fix(auth): JIF-65 correct session expiry`.",
+      "Use `type(scope): description` or `type: description`. A ticket ID is optional. Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert. Example: `fix(auth): correct session expiry`.",
     );
-  const found = parseSections((body ?? "").replace(/\r\n?/g, "\n").replace(/<!--[\s\S]*?(-->|$)/g, ""));
+  const commitCheck = commitErrors(commits);
+  errors.push(...commitCheck.errors);
+  const found = parseSections((body ?? "").replace(/<!--[\s\S]*?(-->|$)/g, ""));
   for (const name of sections) {
     const matches = found.filter((section) => section.name === name);
     if (matches.length !== 1)
@@ -197,7 +290,7 @@ export function validatePullRequest({ title = "", body = "" }, files = []) {
     if (matches.length === 1 && name === "Agent")
       errors.push(...agentErrors(matches[0].text));
     if (matches.length === 1 && name === "Summary")
-      errors.push(...linkageErrors(matches[0].text, title));
+      errors.push(...linkageErrors(matches[0].text, title, commitCheck.tickets));
     if (matches.length === 1 && name === "Evidence")
       errors.push(...uiEvidenceErrors(matches[0].text, files));
   }
