@@ -218,22 +218,27 @@ test("a PR without tickets states No ticket with a reason", () => {
 
 const commit = (message, extra = {}) => ({ sha: "0123456789abcdef", message, ...extra });
 
-test("every non-merge commit needs a magic-word ticket or a No-ticket footer", () => {
+test("commits inherit a valid Summary reference without mandatory footers", () => {
+  const commits = [
+    commit("ci: add validator"),
+    commit("ci: add validator (JIF-65)"),
+    commit("ci: add validator\n\nRefs JIF-65"),
+    commit("Merge branch 'main'", { merge: true }),
+  ];
+  assert.deepEqual(validatePullRequest({ title, body }, [], commits), []);
   assert.deepEqual(
-    validatePullRequest({ title, body }, [], [
-      commit("ci: add validator\n\nRefs JIF-65"),
-      commit("docs: typo\n\nNo-ticket: comment-only fix"),
-      commit("Merge branch 'main'", { merge: true }),
-    ]),
+    validatePullRequest({ title: "ci: add validator", body: body.replace("Refs JIF-65", "Refs #42") }, [], [commits[0]]),
     [],
   );
-  for (const message of ["ci: add validator", "ci: add validator\n\nJIF-65", "ci: x\n\n#42", "ci: x\n\nFixes #0", "ci: x\n\nFixes https://github.com/o/r/pull/4", "ci: x\n\nNo-ticket:", "ci: x\n\nNo-ticket: TBD"])
-    assert.ok(
-      validatePullRequest({ title, body }, [], [commit(message)]).some((error) =>
-        error.includes("has no ticket or issue reference"),
-      ),
-      message,
-    );
+  const errors = validatePullRequest({ title, body: body.replace("Refs JIF-65", "Refs JIF-0") }, [], commits);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /Summary.*missing JIF-65/);
+});
+
+test("Summary must declare a different ticket explicitly named in a commit subject", () => {
+  const errors = validatePullRequest({ title, body }, [], [commit("test: cover related flow (JIF-70)")]);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /Summary.*missing JIF-70/);
 });
 
 test("Summary must declare every ticket referenced by commits", () => {
