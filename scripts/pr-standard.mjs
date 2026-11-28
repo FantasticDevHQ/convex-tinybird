@@ -201,23 +201,19 @@ function linkageErrors(text, title, commitTickets) {
   return errors;
 }
 
-// Every non-merge commit names its Linear ticket or GitHub issue with a magic
-// word, or carries a `No-ticket: <reason>` footer. Returns the errors and the
-// Linear tickets referenced.
-export function commitErrors(commits = []) {
-  const errors = [];
+// Explicit Linear references still belong in Summary. Other commits
+// inherit the pull request's linkage.
+function collectCommitTickets(commits) {
   const tickets = new Set();
   for (const commit of commits) {
     if (commit.merge) continue;
     const message = commit.message ?? "";
-    const found = declaredReferences(message);
-    found.tickets.forEach((id) => tickets.add(id));
-    if (!found.tickets.size && !found.issues.size && !noTicket(message, /^No-ticket:[ \t]*(.+)$/im))
-      errors.push(
-        `Commit ${String(commit.sha ?? "").slice(0, 7) || "(unknown)"} "${message.split("\n")[0]}" has no ticket or issue reference. Add a body line such as \`Fixes ENG-123\`, \`Refs ENG-123\` or \`Fixes #123\`, or a \`No-ticket: <reason>\` footer, then reword the commit and push.`,
-      );
+    const subject = message.split(/\r?\n/, 1)[0];
+    const subjectTicket = subject.match(/ \(([A-Z][A-Z0-9]+-[1-9]\d*)\)\s*$/)?.[1];
+    if (subjectTicket) tickets.add(subjectTicket);
+    for (const id of declaredTickets(message)) tickets.add(id);
   }
-  return { errors, tickets };
+  return tickets;
 }
 
 function uiEvidenceErrors(text, files) {
@@ -272,8 +268,7 @@ export function validatePullRequest(
     errors.push(
       "Use `type(scope): description` or `type: description`. A ticket ID is optional. Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert. Example: `fix(auth): correct session expiry`.",
     );
-  const commitCheck = commitErrors(commits);
-  errors.push(...commitCheck.errors);
+  const commitTickets = collectCommitTickets(commits);
   const found = parseSections((body ?? "").replace(/<!--[\s\S]*?(-->|$)/g, ""));
   for (const name of sections) {
     const matches = found.filter((section) => section.name === name);
@@ -290,7 +285,7 @@ export function validatePullRequest(
     if (matches.length === 1 && name === "Agent")
       errors.push(...agentErrors(matches[0].text));
     if (matches.length === 1 && name === "Summary")
-      errors.push(...linkageErrors(matches[0].text, title, commitCheck.tickets));
+      errors.push(...linkageErrors(matches[0].text, title, commitTickets));
     if (matches.length === 1 && name === "Evidence")
       errors.push(...uiEvidenceErrors(matches[0].text, files));
   }

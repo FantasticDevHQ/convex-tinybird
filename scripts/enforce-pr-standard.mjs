@@ -68,7 +68,7 @@ export async function enforcePullRequestStandard({ api, number, runUrl }) {
     }
     const body = errors.length
       ? `${marker}\n## PR standard failed\n\nThis PR is blocked until these items are corrected:\n\n${errors.map((error) => `- ${error}`).join("\n")}\n\nEdit the PR title/description, or reword and push commits, to rerun this check. See \`docs/pull-request-standard.md\` in this repository. Evidence must describe actual verification; reviewers assess whether it proves the change.\n\n[Check run](${runUrl})`
-      : `${marker}\n## PR standard passed\n\nThe title, the Summary, What, Why, Evidence, and Agent sections, and every commit's Linear reference meet the required format. UI changes include screenshot and/or video attachment references when required. Reviewers still assess correctness and evidence quality.\n\n[Check run](${runUrl})`;
+      : `${marker}\n## PR standard passed\n\nThe title, ticket linkage, and the Summary, What, Why, Evidence, and Agent sections meet the required format. UI changes include screenshot and/or video attachment references when required. Reviewers still assess correctness and evidence quality.\n\n[Check run](${runUrl})`;
     if (previous && previous.body !== body)
       await api("PATCH", `/issues/comments/${previous.id}`, { body });
     else if (!previous && errors.length)

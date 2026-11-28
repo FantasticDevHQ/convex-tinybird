@@ -1,8 +1,7 @@
 # Pull request standard
 
-Work is tracked on commits. A feature branch can carry many commits, each tied
-to its own Linear ticket, so the ticket belongs on the commit and the PR title
-does not have to carry one.
+The pull request Summary is the source of ticket linkage. Use the owning
+ticket in the title for tracked work so it stays visible in squash history.
 
 ## Titles
 
@@ -27,39 +26,13 @@ feat(api)!: require authenticated requests
 
 ## Commits
 
-Every non-merge commit says which ticket it works on. Put a Linear magic word
-and the ticket ID on its own line in the commit body:
+Commits inherit the pull request's ticket linkage. Use the repository's
+commit-message convention. A commit may carry a matching subject suffix such as
+`(JIF-65)` or an explicit body reference such as `Refs JIF-65`. Declare any
+additional Linear ticket explicitly named by either convention in Summary.
 
-```text
-feat(billing): add invoice export
-
-Fixes JIF-65
-```
-
-Use a closing word such as `Fixes` only when the commit completes the ticket,
-and a non-closing word such as `Refs` for partial work. Outside contributors
-without Linear access reference a GitHub issue the same way, as `#42`,
-`owner/repo#42` or a full `https://github.com/.../issues/42` URL:
-
-```text
-fix(cli): handle missing config file
-
-Fixes #42
-```
-
-A commit that works on no ticket or issue carries a footer with the reason:
-
-```text
-docs: fix typo in README
-
-No-ticket: comment-only fix
-```
-
-Linear links a commit only through a magic word; a bare ID is not enough. It
-moves the ticket to In Progress when the commit is pushed and to Done when the
-commit reaches the default branch. When a PR is squash-merged, the squash
-message is built from the PR title and body, so the Summary declarations below
-end up on the merged commit too. Merge commits are exempt.
+Use the PR title and description for the default squash message so trunk history
+preserves both the owning ticket and its linkage declaration.
 
 Outside contributors follow the shared
 [contributing guide](https://github.com/FantasticDevHQ/.github/blob/main/CONTRIBUTING.md);

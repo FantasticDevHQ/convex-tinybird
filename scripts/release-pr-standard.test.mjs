@@ -57,9 +57,9 @@ test("release body refuses missing run identity, titles and delimiters", () => {
   assert.throws(() => releaseBody({ body: "no delimiters", title, runId: "1", runUrl }));
 });
 
-test("the release commit fails without the footer and passes with it", () => {
+test("the release commit inherits Summary linkage with or without the footer", () => {
   const body = releaseBody({ body: generated, title, runId: "123", runUrl });
-  assert.match(validatePullRequest({ title, body }, [], [{ ...commit, message: title }]).join(), /has no ticket or issue reference/);
+  assert.deepEqual(validatePullRequest({ title, body }, [], [{ ...commit, message: title }]), []);
   assert.equal(withTicketFooter(title), `${title}\n\n${footer}\n`);
   assert.equal(withTicketFooter(commit.message), commit.message);
 });
