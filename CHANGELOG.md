@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.9](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.8...v0.2.9) (2026-11-28)
+
+
+### Documentation
+
+* **community:** adopt organization community health defaults ([#25](https://github.com/FantasticDevHQ/convex-tinybird/issues/25)) ([bd62a4c](https://github.com/FantasticDevHQ/convex-tinybird/commit/bd62a4c144701aa39ffa795288ecf272515e88ff))
+
+
+### Continuous Integration
+
+* **release:** OSS-43 make release PRs meet the PR standard ([#28](https://github.com/FantasticDevHQ/convex-tinybird/issues/28)) ([ad8c2ae](https://github.com/FantasticDevHQ/convex-tinybird/commit/ad8c2aef57ef049ceda69a837eb1f4a4a82cab44))
+* **standards:** add the issue standard workflow ([#27](https://github.com/FantasticDevHQ/convex-tinybird/issues/27)) ([fc8fbe2](https://github.com/FantasticDevHQ/convex-tinybird/commit/fc8fbe208acccbc511e9104ca96efe3d692ae7a0))
+* **standards:** add the PR standard re-run workflow ([#29](https://github.com/FantasticDevHQ/convex-tinybird/issues/29)) ([7b395d7](https://github.com/FantasticDevHQ/convex-tinybird/commit/7b395d795037c835c12329aea95b394be3d811c5))
+* **standards:** inherit pull request ticket linkage (OSS-56) ([b78c1c2](https://github.com/FantasticDevHQ/convex-tinybird/commit/b78c1c28625dfa2e7220c05f8e02ff00dad037d6))
+* **standards:** OSS-56 inherit ticket linkage from the pull request ([#30](https://github.com/FantasticDevHQ/convex-tinybird/issues/30)) ([b78c1c2](https://github.com/FantasticDevHQ/convex-tinybird/commit/b78c1c28625dfa2e7220c05f8e02ff00dad037d6))
+
 ## [0.2.8](https://github.com/FantasticDevHQ/convex-tinybird/compare/v0.2.7...v0.2.8) (2026-11-14)
 
 
